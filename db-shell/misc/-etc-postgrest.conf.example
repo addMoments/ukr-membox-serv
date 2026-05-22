@@ -1,0 +1,11 @@
+db-uri = "postgres://webanon:redacted@localhost/membox_db"
+db-schemas = "public"
+db-anon-role = "webanon"
+
+# JWT Authentication settings
+jwt-secret = "redacted"
+
+# Server settings - PostgREST doesn't support SSL directly
+# Use Nginx as a reverse proxy for HTTPS termination
+server-host = "127.0.0.1"
+server-port = 3000

@@ -1,0 +1,14 @@
+[Unit]
+Description=Membox App Server
+After=network.target
+
+[Service]
+WorkingDirectory=/home/ubuntu/membox-serv
+ExecStart=/home/ubuntu/membox-serv/main true
+User=root
+Group=root
+Restart=always
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

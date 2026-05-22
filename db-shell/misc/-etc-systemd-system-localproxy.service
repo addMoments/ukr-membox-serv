@@ -1,0 +1,14 @@
+[Unit]
+Description=Local Proxy Service (HTTPS Termination)
+After=network.target
+
+[Service]
+WorkingDirectory=/home/ubuntu/db-proxy
+ExecStart=/home/ubuntu/db-proxy/local-proxy
+User=root
+Group=root
+Restart=always
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

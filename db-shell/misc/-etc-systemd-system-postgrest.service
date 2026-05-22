@@ -1,0 +1,14 @@
+[Unit]
+Description=PostgREST Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/postgrest /etc/postgrest.conf
+User=postgres
+Group=postgres
+Restart=always
+LimitNOFILE=4096
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
