@@ -8,7 +8,7 @@ Bu dokuman **musteri maddeleri (1–4)**, **yeni rol/promo kararlari**, **collab
 
 **Ilke:** Bugun prod’da calisan odeme, siparis, event, guest okuma, mevcut admin endpointleri ve snapshot davranisi **kirilmadan** ilerlenir.
 
-| Yaklasim | Aciklama |
+| Yaklasim | Aciklama | 
 |----------|-----------|
 | Opsiyonel veri | Yeni kolonlar **NULL** / yeni tablolar mevcut satirlari etkilemez; eski siparisler `promo_code_uid = NULL`. |
 | Varsayilan davranis | Reklam/banner ozelligi yoksa veya ayar yapilmamisssa guest ve API **onceki gibi** (banner alani render edilmez veya bos). |

@@ -175,12 +175,28 @@ CREATE TABLE cart_items (
     UNIQUE (cart_uid, product_uid)
 );
 
+-- Partnership kayitlari promo kodlarinin hangi kisi/kurum kanaliyla iliskili
+-- oldugunu tutar. Soft delete gecmis promo ve rapor referanslarini korur.
+CREATE TABLE partnerships (
+    uid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    surname TEXT NOT NULL,
+    company_name TEXT,
+    phone TEXT,
+    email TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMPTZ
+);
+
 -- Promo kodlari:
 --   - MVP'de yalniz yuzde indirim desteklenir (`discount_type = 'percent'`).
 --   - `valid_from` bos birakilirsa CURRENT_TIMESTAMP ile dolar; `valid_until` ve `usage_limit_total` opsiyoneldir.
 --   - `is_expired` tutulmaz; pasiflik `is_active`, `deactivated_at`, `deactivated_reason` ile aciklanir.
 CREATE TABLE promo_codes (
     uid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    partnership_uid UUID REFERENCES partnerships(uid),
     code TEXT NOT NULL,
     discount_type TEXT NOT NULL DEFAULT 'percent',
     discount_value DECIMAL(10, 2) NOT NULL,
@@ -205,6 +221,7 @@ CREATE TABLE promo_codes (
 );
 
 CREATE UNIQUE INDEX promo_codes_upper_code_unique ON promo_codes (UPPER(BTRIM(code)));
+CREATE INDEX promo_codes_partnership_uid_idx ON promo_codes (partnership_uid);
 
 CREATE TABLE purchases (
     uid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -216,10 +233,14 @@ CREATE TABLE purchases (
     cart_uid UUID REFERENCES carts(uid),
     promo_code_uid UUID REFERENCES promo_codes(uid),
     promo_code_text_snapshot TEXT,
+    promo_partnership_uid UUID REFERENCES partnerships(uid),
+    promo_partnership_snapshot JSONB,
     gross_total DECIMAL(10, 2),
     discount_amount DECIMAL(10, 2),
     net_total DECIMAL(10, 2)
 );
+
+CREATE INDEX purchases_promo_partnership_uid_idx ON purchases (promo_partnership_uid);
 
 CREATE TABLE participants (
     uid UUID PRIMARY KEY DEFAULT gen_random_uuid(),

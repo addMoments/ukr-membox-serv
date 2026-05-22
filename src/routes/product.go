@@ -355,6 +355,43 @@ func snapshotCartItemPrices(cartUID string, cartItems []types.CartItem, products
 	return nil
 }
 
+// loadPromoPartnershipSnapshot, purchase aninda promo partner bilgisini sabitler.
+func loadPromoPartnershipSnapshot(promoCodeUID string) (interface{}, interface{}, error) {
+	if strings.TrimSpace(promoCodeUID) == "" {
+		return nil, nil, nil
+	}
+
+	row, err := db.Query_one(sqlbuilder.BuildNamed(`
+		SELECT
+			COALESCE(pc.partnership_uid::text, '') AS partnership_uid,
+			COALESCE(p.name, '') AS name,
+			COALESCE(p.surname, '') AS surname,
+			COALESCE(p.company_name, '') AS company_name,
+			COALESCE(p.phone, '') AS phone,
+			COALESCE(p.email, '') AS email
+		FROM promo_codes pc
+		LEFT JOIN partnerships p ON p.uid = pc.partnership_uid
+		WHERE pc.uid = ${promo_code_uid}
+		LIMIT 1
+	`, map[string]interface{}{"promo_code_uid": promoCodeUID}))
+	if err != nil {
+		return nil, nil, err
+	}
+	if string(row[0]) == "" {
+		return nil, nil, nil
+	}
+
+	snapshot := types.Js_object{
+		"uid":          string(row[0]),
+		"name":         string(row[1]),
+		"surname":      string(row[2]),
+		"company_name": emptyStringAsNil(row[3]),
+		"phone":        emptyStringAsNil(row[4]),
+		"email":        emptyStringAsNil(row[5]),
+	}
+	return string(row[0]), snapshot.Json(), nil
+}
+
 func (rfrnc product_routes_typ) GetProducts(w http.ResponseWriter, r *http.Request) {
 	var stat_code = 0
 	var payload []types.Js_object
@@ -1229,6 +1266,8 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 	totalPrice := 0.0
 	paymentAmount := 0.0
 	var promoQuote promo.Quote
+	var promoPartnershipUID interface{}
+	var promoPartnershipSnapshot interface{}
 	hasPromoCode := promo.NormalizeCode(req.PromoCode) != ""
 
 	product_uids := []string{}
@@ -1309,6 +1348,11 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		paymentAmount = promoQuote.NetTotal
+		promoPartnershipUID, promoPartnershipSnapshot, err = loadPromoPartnershipSnapshot(promoQuote.PromoCodeUID)
+		if err != nil {
+			err = utils.Tag_err("mce4ps", err)
+			return
+		}
 	}
 
 	purchaseInfo := types.Js_object{"email": req.Email}
@@ -1324,6 +1368,8 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 			"provider",
 			"promo_code_uid",
 			"promo_code_text_snapshot",
+			"promo_partnership_uid",
+			"promo_partnership_snapshot",
 			"gross_total",
 			"discount_amount",
 			"net_total",
@@ -1334,6 +1380,8 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 			provider.Name,
 			promoQuote.PromoCodeUID,
 			promoQuote.PromoCodeTextSnapshot,
+			promoPartnershipUID,
+			promoPartnershipSnapshot,
 			promoQuote.GrossTotal,
 			promoQuote.DiscountAmount,
 			promoQuote.NetTotal,

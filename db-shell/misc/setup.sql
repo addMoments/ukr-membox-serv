@@ -91,12 +91,47 @@ CREATE TABLE IF NOT EXISTS panel_admins (
 ALTER TABLE panel_admins ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL;
 ALTER TABLE panel_admins ADD COLUMN IF NOT EXISTS deleted_by_uid UUID NULL REFERENCES users(uid) ON DELETE SET NULL;
 
+-- Partnership kayitlari promo kodlarinin hangi kisi/kurum kanaliyla iliskili
+-- oldugunu tutar. Kayitlar editlenebilir; eski raporlar purchase snapshotlariyla korunur.
+CREATE TABLE IF NOT EXISTS partnerships (
+    uid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    surname TEXT NOT NULL,
+    company_name TEXT,
+    phone TEXT,
+    email TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMPTZ
+);
+
+-- Tablo onceden daha dar olusturulduysa setup tekrar calistiginda tamamlanir.
+ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS name TEXT;
+ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS surname TEXT;
+ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS company_name TEXT;
+ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE partnerships ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+UPDATE partnerships
+SET name = COALESCE(NULLIF(BTRIM(name), ''), 'Unknown')
+WHERE name IS NULL OR BTRIM(name) = '';
+UPDATE partnerships
+SET surname = COALESCE(NULLIF(BTRIM(surname), ''), 'Unknown')
+WHERE surname IS NULL OR BTRIM(surname) = '';
+ALTER TABLE partnerships ALTER COLUMN name SET NOT NULL;
+ALTER TABLE partnerships ALTER COLUMN surname SET NOT NULL;
+
 -- Promo kodlari:
 --   - MVP'de yalniz yuzde indirim desteklenir (`discount_type = 'percent'`).
 --   - `valid_from` bos birakilirsa CURRENT_TIMESTAMP ile dolar; `valid_until` ve `usage_limit_total` opsiyoneldir.
 --   - `is_expired` tutulmaz; pasiflik `is_active`, `deactivated_at`, `deactivated_reason` ile aciklanir.
 CREATE TABLE IF NOT EXISTS promo_codes (
     uid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    partnership_uid UUID REFERENCES partnerships(uid),
     code TEXT NOT NULL,
     discount_type TEXT NOT NULL DEFAULT 'percent',
     discount_value DECIMAL(10, 2) NOT NULL,
@@ -112,6 +147,7 @@ CREATE TABLE IF NOT EXISTS promo_codes (
 );
 
 -- Tablo onceden eksik kolonlarla olusmussa migration tekrar calistiginda tamamlanir.
+ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS partnership_uid UUID REFERENCES partnerships(uid);
 ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS code TEXT NOT NULL;
 ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS discount_type TEXT NOT NULL DEFAULT 'percent';
 ALTER TABLE promo_codes ADD COLUMN IF NOT EXISTS discount_value DECIMAL(10, 2) NOT NULL;
@@ -176,6 +212,8 @@ END $$;
 -- Kod karsilastirmasi case-insensitive ve bastaki/sondaki bosluklardan bagimsizdir.
 CREATE UNIQUE INDEX IF NOT EXISTS promo_codes_upper_code_unique
 ON promo_codes (UPPER(BTRIM(code)));
+CREATE INDEX IF NOT EXISTS promo_codes_partnership_uid_idx
+ON promo_codes (partnership_uid);
 
 -- Product display fields: admin editlenebilir ad/aciklama metinleri.
 -- Her kolon ayri ALTER olarak tutulur; boylece migration parca parca
@@ -245,9 +283,13 @@ ALTER TABLE cart_items
 ALTER TABLE purchases
     ADD COLUMN IF NOT EXISTS promo_code_uid UUID REFERENCES promo_codes(uid),
     ADD COLUMN IF NOT EXISTS promo_code_text_snapshot TEXT,
+    ADD COLUMN IF NOT EXISTS promo_partnership_uid UUID REFERENCES partnerships(uid),
+    ADD COLUMN IF NOT EXISTS promo_partnership_snapshot JSONB,
     ADD COLUMN IF NOT EXISTS gross_total DECIMAL(10, 2),
     ADD COLUMN IF NOT EXISTS discount_amount DECIMAL(10, 2),
     ADD COLUMN IF NOT EXISTS net_total DECIMAL(10, 2);
+CREATE INDEX IF NOT EXISTS purchases_promo_partnership_uid_idx
+ON purchases (promo_partnership_uid);
 
 -- Event storage expiration sistemi:
 --   storage_until                : paket bazli icerik saklama bitis tarihi

@@ -25,6 +25,7 @@ var AdminPromoRoutes admin_promo_routes_typ
 
 type adminPromoCreateReq struct {
 	Code            string   `json:"code"`
+	PartnershipUID  string   `json:"partnership_uid"`
 	DiscountValue   float64  `json:"discount_value"`
 	ValidFrom       *string  `json:"valid_from"`
 	ValidUntil      *string  `json:"valid_until"`
@@ -59,23 +60,11 @@ func (apr admin_promo_routes_typ) List(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := db.Query_all(sqlbuilder.BuildNamed(fmt.Sprintf(`
 		SELECT
-			uid::text,
-			code,
-			discount_type,
-			discount_value::text,
-			valid_from::text,
-			COALESCE(valid_until::text, '') AS valid_until,
-			COALESCE(usage_limit_total::text, '') AS usage_limit_total,
-			usage_count::text,
-			is_active::text,
-			COALESCE(deactivated_at::text, '') AS deactivated_at,
-			COALESCE(deactivated_reason, '') AS deactivated_reason,
-			COALESCE(deleted_at::text, '') AS deleted_at,
-			created_at::text
+			%s
 		FROM promo_codes
 		%s
 		ORDER BY created_at DESC
-	`, whereDeleted), map[string]interface{}{}))
+	`, adminPromoReturningColumns(), whereDeleted), map[string]interface{}{}))
 	if err != nil {
 		err = utils.Tag_err("apl1", err)
 		return
@@ -138,6 +127,10 @@ func (apr admin_promo_routes_typ) Report(w http.ResponseWriter, r *http.Request)
 		SELECT
 			p.promo_code_uid::text,
 			COALESCE(p.promo_code_text_snapshot, pc.code, '') AS promo_code,
+			COALESCE(p.promo_partnership_uid::text, pc.partnership_uid::text, '') AS partnership_uid,
+			COALESCE(p.promo_partnership_snapshot->>'name', pt.name, '') AS partnership_name,
+			COALESCE(p.promo_partnership_snapshot->>'surname', pt.surname, '') AS partnership_surname,
+			COALESCE(p.promo_partnership_snapshot->>'company_name', pt.company_name, '') AS partnership_company_name,
 			COUNT(*)::text AS usage_count,
 			COALESCE(SUM(p.gross_total), 0)::text AS gross_total,
 			COALESCE(SUM(p.discount_amount), 0)::text AS discount_total,
@@ -146,9 +139,16 @@ func (apr admin_promo_routes_typ) Report(w http.ResponseWriter, r *http.Request)
 			MAX(p.created_at)::text AS last_used_at
 		FROM purchases p
 		LEFT JOIN promo_codes pc ON pc.uid = p.promo_code_uid
+		LEFT JOIN partnerships pt ON pt.uid = COALESCE(p.promo_partnership_uid, pc.partnership_uid)
 		WHERE %s
-		GROUP BY p.promo_code_uid, COALESCE(p.promo_code_text_snapshot, pc.code, '')
-		ORDER BY usage_count::int DESC, last_used_at DESC
+		GROUP BY
+			p.promo_code_uid,
+			COALESCE(p.promo_code_text_snapshot, pc.code, ''),
+			COALESCE(p.promo_partnership_uid::text, pc.partnership_uid::text, ''),
+			COALESCE(p.promo_partnership_snapshot->>'name', pt.name, ''),
+			COALESCE(p.promo_partnership_snapshot->>'surname', pt.surname, ''),
+			COALESCE(p.promo_partnership_snapshot->>'company_name', pt.company_name, '')
+		ORDER BY COUNT(*) DESC, MAX(p.created_at) DESC
 	`, strings.Join(filters, " AND ")), args))
 	if err != nil {
 		err = utils.Tag_err("apr1", err)
@@ -156,16 +156,29 @@ func (apr admin_promo_routes_typ) Report(w http.ResponseWriter, r *http.Request)
 	}
 
 	for _, row := range rows {
-		payload = append(payload, types.Js_object{
+		reportRow := types.Js_object{
 			"promo_code_uid": string(row[0]),
 			"promo_code":     string(row[1]),
-			"usage_count":    mustParseInt(row[2]),
-			"gross_total":    mustParseFloat(row[3]),
-			"discount_total": mustParseFloat(row[4]),
-			"net_total":      mustParseFloat(row[5]),
-			"first_used_at":  string(row[6]),
-			"last_used_at":   string(row[7]),
-		})
+			"usage_count":    mustParseInt(row[6]),
+			"gross_total":    mustParseFloat(row[7]),
+			"discount_total": mustParseFloat(row[8]),
+			"net_total":      mustParseFloat(row[9]),
+			"first_used_at":  string(row[10]),
+			"last_used_at":   string(row[11]),
+		}
+		if string(row[2]) == "" {
+			reportRow["partnership_uid"] = nil
+			reportRow["partnership"] = nil
+		} else {
+			reportRow["partnership_uid"] = string(row[2])
+			reportRow["partnership"] = types.Js_object{
+				"uid":          string(row[2]),
+				"name":         string(row[3]),
+				"surname":      string(row[4]),
+				"company_name": emptyStringAsNil(row[5]),
+			}
+		}
+		payload = append(payload, reportRow)
 	}
 }
 
@@ -203,6 +216,16 @@ func (apr admin_promo_routes_typ) Create(w http.ResponseWriter, r *http.Request)
 	code := promo.NormalizeCode(req.Code)
 	if code == "" {
 		err = errors.New("code is required")
+		statCode = http.StatusBadRequest
+		return
+	}
+	partnershipUID := strings.TrimSpace(req.PartnershipUID)
+	if partnershipUID == "" {
+		err = errors.New("partnership_uid is required")
+		statCode = http.StatusBadRequest
+		return
+	}
+	if err = ensureActivePartnershipExists(partnershipUID); err != nil {
 		statCode = http.StatusBadRequest
 		return
 	}
@@ -251,8 +274,8 @@ func (apr admin_promo_routes_typ) Create(w http.ResponseWriter, r *http.Request)
 
 	ib := sqlbuilder.NewInsertBuilder()
 	ib.InsertInto("promo_codes")
-	cols := []string{"code", "discount_type", "discount_value", "valid_until", "usage_limit_total", "is_active"}
-	values := []interface{}{code, "percent", req.DiscountValue, validUntil, usageLimit, isActive}
+	cols := []string{"code", "partnership_uid", "discount_type", "discount_value", "valid_until", "usage_limit_total", "is_active"}
+	values := []interface{}{code, partnershipUID, "percent", req.DiscountValue, validUntil, usageLimit, isActive}
 	if validFrom != nil {
 		cols = append(cols, "valid_from")
 		values = append(values, validFrom)
@@ -421,6 +444,20 @@ func (apr admin_promo_routes_typ) Update(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	if rawPartnershipUID, ok := raw["partnership_uid"]; ok {
+		partnershipUID, parseErr := parseRequiredTextField(rawPartnershipUID, "partnership_uid")
+		if parseErr != nil {
+			err = parseErr
+			statCode = http.StatusBadRequest
+			return
+		}
+		if err = ensureActivePartnershipExists(partnershipUID); err != nil {
+			statCode = http.StatusBadRequest
+			return
+		}
+		assignments = append(assignments, ub.Assign("partnership_uid", partnershipUID))
+	}
+
 	if len(assignments) == 0 {
 		err = errors.New("no fields to update")
 		statCode = http.StatusBadRequest
@@ -573,10 +610,15 @@ func (apr admin_promo_routes_typ) setActiveState(w http.ResponseWriter, r *http.
 	}
 }
 
+// adminPromoReturningColumns, promo CRUD cevaplarinda partnership ozeti dahil ortak kolonlari tutar.
 func adminPromoReturningColumns() string {
 	return `
 		uid::text,
 		code,
+		COALESCE(partnership_uid::text, '') AS partnership_uid,
+		COALESCE((SELECT p.name FROM partnerships p WHERE p.uid = promo_codes.partnership_uid), '') AS partnership_name,
+		COALESCE((SELECT p.surname FROM partnerships p WHERE p.uid = promo_codes.partnership_uid), '') AS partnership_surname,
+		COALESCE((SELECT p.company_name FROM partnerships p WHERE p.uid = promo_codes.partnership_uid), '') AS partnership_company_name,
 		discount_type,
 		discount_value::text,
 		valid_from::text,
@@ -591,22 +633,67 @@ func adminPromoReturningColumns() string {
 	`
 }
 
+// promoRowPayload, promo DB satirini admin panelinin tuketecegi JSON sekline cevirir.
 func promoRowPayload(row [][]byte) types.Js_object {
-	return types.Js_object{
+	payload := types.Js_object{
 		"uid":                string(row[0]),
 		"code":               string(row[1]),
-		"discount_type":      string(row[2]),
-		"discount_value":     mustParseFloat(row[3]),
-		"valid_from":         string(row[4]),
-		"valid_until":        emptyStringAsNil(row[5]),
-		"usage_limit_total":  emptyStringAsNilInt(row[6]),
-		"usage_count":        mustParseInt(row[7]),
-		"is_active":          parseTextBool(row[8]),
-		"deactivated_at":     emptyStringAsNil(row[9]),
-		"deactivated_reason": emptyStringAsNil(row[10]),
-		"deleted_at":         emptyStringAsNil(row[11]),
-		"created_at":         string(row[12]),
+		"partnership_uid":    emptyStringAsNil(row[2]),
+		"discount_type":      string(row[6]),
+		"discount_value":     mustParseFloat(row[7]),
+		"valid_from":         string(row[8]),
+		"valid_until":        emptyStringAsNil(row[9]),
+		"usage_limit_total":  emptyStringAsNilInt(row[10]),
+		"usage_count":        mustParseInt(row[11]),
+		"is_active":          parseTextBool(row[12]),
+		"deactivated_at":     emptyStringAsNil(row[13]),
+		"deactivated_reason": emptyStringAsNil(row[14]),
+		"deleted_at":         emptyStringAsNil(row[15]),
+		"created_at":         string(row[16]),
 	}
+	if string(row[2]) == "" {
+		payload["partnership"] = nil
+		return payload
+	}
+	payload["partnership"] = types.Js_object{
+		"uid":          string(row[2]),
+		"name":         string(row[3]),
+		"surname":      string(row[4]),
+		"company_name": emptyStringAsNil(row[5]),
+	}
+	return payload
+}
+
+// parseRequiredTextField, JSON PATCH alanlarinda zorunlu string degeri trimleyerek okur.
+func parseRequiredTextField(raw json.RawMessage, fieldName string) (string, error) {
+	if isJSONNull(raw) {
+		return "", fmt.Errorf("%s is required", fieldName)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", fmt.Errorf("%s must be a string", fieldName)
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", fmt.Errorf("%s is required", fieldName)
+	}
+	return value, nil
+}
+
+// ensureActivePartnershipExists, promo baglanmadan once partnership kaydinin aktif oldugunu dogrular.
+func ensureActivePartnershipExists(partnershipUID string) error {
+	row, err := db.Query_one(sqlbuilder.BuildNamed(`
+		SELECT uid::text
+		FROM partnerships
+		WHERE uid = ${partnership_uid}
+		  AND is_active = TRUE
+		  AND deleted_at IS NULL
+		LIMIT 1
+	`, map[string]interface{}{"partnership_uid": partnershipUID}))
+	if err != nil || len(row) == 0 {
+		return errors.New("partnership not found")
+	}
+	return nil
 }
 
 func parsePromoTime(raw string, fieldName string) (time.Time, error) {
