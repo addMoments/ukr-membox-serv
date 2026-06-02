@@ -1128,7 +1128,7 @@ func (rfrnc product_routes_typ) PurchaseStatus(w http.ResponseWriter, r *http.Re
 	}
 
 	sb := sqlbuilder.NewSelectBuilder()
-	sb.Select("provider_id", "purchase_info").From("purchases").Where(sb.Equal("uid", purchaseUID))
+	sb.Select("provider_id", "purchase_info", "COALESCE(net_total, 0)::text").From("purchases").Where(sb.Equal("uid", purchaseUID))
 	res, err := db.Query_one(sb)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
@@ -1158,6 +1158,11 @@ func (rfrnc product_routes_typ) PurchaseStatus(w http.ResponseWriter, r *http.Re
 		return
 	}
 	decEmail, _ := purchaseInfo["email"].(string)
+	netTotal, err := strconv.ParseFloat(string(res[2]), 64)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	pt := payments.PaymentToken{
 		ReferenceNo: packedUID,
@@ -1174,10 +1179,11 @@ func (rfrnc product_routes_typ) PurchaseStatus(w http.ResponseWriter, r *http.Re
 	signup_url := server_url + "/signup/" + encPaymentTkn
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(types.Js_object{
 		"status":     "success",
 		"signup_url": signup_url,
 		"email":      decEmail,
+		"net_total":  netTotal,
 	})
 }
 
