@@ -134,6 +134,7 @@ func main() {
 
 	apiRoutes := r.PathPrefix("/api").Subrouter()
 	apiRoutes.HandleFunc("/upload/{purpose}", auth.AuthMiddleware(routes.UploadRoutes.Upload, "auth"))
+	apiRoutes.HandleFunc("/auth/upload/{uploadPackedUid}", auth.AuthMiddleware(routes.UploadRoutes.Delete, "auth")).Methods("DELETE")
 	apiRoutes.HandleFunc("/qr/{eventPackedUid}", auth.AuthMiddleware(routes.Adjust_event_qr, "auth"))
 	apiRoutes.HandleFunc("/calc-size/{eventPackedUid}", auth.AuthMiddleware(routes.Calc_size_route, "auth"))
 	apiRoutes.HandleFunc("/products", routes.ProductRoutes.GetProducts).Methods("GET")

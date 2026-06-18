@@ -266,3 +266,120 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 	err = db.Exec(ib)
 
 }
+
+// Delete permanently deletes an upload from the database and S3.
+// Requires the user to be an admin of the event associated with the upload.
+func (ur upload_routes_typ) Delete(w http.ResponseWriter, r *http.Request) {
+	var stat_code = 0
+	var payload interface{}
+	var err error
+
+	defer (func() {
+		if err != nil {
+			if errors.Is(err, dbscripts.ErrEventClosed) {
+				_ = networkutils.SendErrorJSON(
+					w,
+					http.StatusGone,
+					"EVENT_CLOSED",
+					networkutils.EventClosedMessage(r),
+				)
+				return
+			}
+			if stat_code == 0 {
+				stat_code = 500
+			}
+			http.Error(w, err.Error(), stat_code)
+			return
+		}
+
+		networkutils.SendJson(payload, w)
+	})()
+
+	claims, ok := r.Context().Value("claims").(auth.TokenClaims)
+	if !ok || claims.Role != "auth" {
+		err = errors.New("unauthorized")
+		stat_code = http.StatusUnauthorized
+		return
+	}
+
+	uploadPackedUID := mux.Vars(r)["uploadPackedUid"]
+	uploadUID, err := utils.UUID.UnpackUUID(uploadPackedUID)
+	if err != nil {
+		err = utils.Tag_err("ud1", err)
+		return
+	}
+
+	// Query the upload to get its event_uid and S3 path
+	uploadBldr := sqlbuilder.BuildNamed(`
+		SELECT event_uid, value
+		FROM uploads
+		WHERE uid = ${upload_uid}
+	`, map[string]interface{}{
+		"upload_uid": uploadUID,
+	})
+
+	uploadRes, queryErr := db.Query_one(uploadBldr)
+	if queryErr != nil {
+		err = utils.Tag_err("ud2", queryErr)
+		return
+	}
+
+	if len(uploadRes) == 0 {
+		payload = map[string]interface{}{
+			"success": true,
+			"already_deleted": true,
+		}
+		stat_code = http.StatusOK
+		return
+	}
+
+	if string(uploadRes[0]) == "" {
+		err = errors.New("upload not found")
+		stat_code = http.StatusNotFound
+		return
+	}
+
+	eventUID := string(uploadRes[0])
+	s3Path := string(uploadRes[1])
+
+	// Verify user is admin of this event
+	isAdmin, err := dbscripts.Is_events_admin(eventUID, claims.UserUID)
+	if errors.Is(err, dbscripts.ErrEventClosed) {
+		return
+	}
+	if err != nil {
+		err = utils.Tag_err("ud3", err)
+		return
+	}
+	if !isAdmin {
+		err = errors.New("forbidden")
+		stat_code = http.StatusForbidden
+		return
+	}
+
+	// Delete the upload from the database
+	deleteBldr := sqlbuilder.BuildNamed(`
+		DELETE FROM uploads
+		WHERE uid = ${upload_uid}
+	`, map[string]interface{}{
+		"upload_uid": uploadUID,
+	})
+
+	if err = db.Exec(deleteBldr); err != nil {
+		err = utils.Tag_err("ud4", err)
+		return
+	}
+
+	// Delete from S3 (fire and forget - log error but don't fail the operation)
+	if s3Path != "" {
+		if s3Err := s3wrap.Public_s3.Rm(s3Path); s3Err != nil {
+			// Log the error but don't fail the operation
+			fmt.Printf("[upload.delete] S3 deletion failed for %s: %v\n", s3Path, s3Err)
+		}
+	}
+
+	payload = map[string]interface{}{
+		"success": true,
+	}
+	stat_code = http.StatusOK
+}
