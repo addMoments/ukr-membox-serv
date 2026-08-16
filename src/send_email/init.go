@@ -10,6 +10,10 @@ func Init(
 	info_mail_conf *Mail_serv,
 ) {
 	Info_mail = info_mail_conf
+	if Info_mail.Outgoing_server == "" {
+		fmt.Println("smtp not configured, email disabled")
+		return
+	}
 	err := Info_mail.Init_smtp()
 	if err != nil {
 		panic(err)
