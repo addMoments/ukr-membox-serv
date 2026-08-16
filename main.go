@@ -144,7 +144,7 @@ func main() {
 	apiRoutes.HandleFunc("/admin/products/{productUid}", auth.SuperAdminMiddleware(routes.ProductRoutes.AdminUpdateProduct)).Methods("PATCH")
 	// T-14 uyari mail + T-0 soft-delete'i manuel tetikler. ?dry_run=true ile
 	// hicbir veriyi degistirmeden sadece etkilenecek sayilari raporlar.
-	apiRoutes.HandleFunc("/admin/run-storage-check", auth.AuthMiddleware(routes.AdminStorageRoutes.RunStorageCheck, "auth")).Methods("POST")
+	apiRoutes.HandleFunc("/admin/run-storage-check", auth.SuperAdminMiddleware(routes.AdminStorageRoutes.RunStorageCheck)).Methods("POST")
 	apiRoutes.HandleFunc("/event/{eventPackedUid}/features", auth.AuthMiddleware(routes.FeaturesRoute.Private, "auth")).Methods("GET")
 	apiRoutes.HandleFunc("/event/{eventPackedUid}/public-features", routes.FeaturesRoute.Public).Methods("GET")
 	apiRoutes.HandleFunc("/event/{eventPackedUid}/advertorial", auth.AuthMiddleware(routes.AdvertorialRoutes.PrivateGet, "auth")).Methods("GET")
