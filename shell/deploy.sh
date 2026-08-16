@@ -26,6 +26,20 @@ for file in "${exclude_files[@]}"; do
     exclude_args+=("--exclude=$file")
 done
 
+# .env is shipped in the tarball and replaces the live config on the server.
+# Refuse to deploy a local-development one.
+db_host=$(python3 -c 'import json; print(json.load(open(".env"))["db"]["host"])' 2>/dev/null)
+case "$db_host" in
+    "")
+        echo "aborted: .env not found or unreadable" >&2
+        exit 1
+        ;;
+    127.0.0.1|localhost|host.docker.internal)
+        echo "aborted: .env is the local dev copy (db.host=$db_host); put the production .env in place first" >&2
+        exit 1
+        ;;
+esac
+
 echo "compressing..."
 
 tar -czf "$zip_path" "${exclude_args[@]}" -C "$PROJ_DIR" "${include_folders[@]}" "${include_rootfiles[@]}"
