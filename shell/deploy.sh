@@ -52,7 +52,7 @@ rm $zip_path
 
 echo "remote execution..."
 
-ssh -t -i "$pem_path" "$user_name"@"$ec2_ip" "\
+ssh -i "$pem_path" "$user_name"@"$ec2_ip" "\
 cd $dist_folder &&\
 tar -xvzf ./$folder_name.tar.gz &&\
 rm ./$folder_name.tar.gz &&\
