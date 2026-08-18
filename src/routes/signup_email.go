@@ -16,7 +16,6 @@ import (
 	"membox-serv/src/utils"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/huandu/go-sqlbuilder"
@@ -211,21 +210,16 @@ func (r signup_email_routes_typ) Post(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	// Aktivasyon sonrasi tarih degistirilemedigi icin varsayilan uzak tutulur;
-	// host dugun tarihine gore kendisi one ceker.
-	defaultActivationDelay := 365 * 24 * time.Hour
-
-	startIso := time.Now().Add(defaultActivationDelay).Format(time.RFC3339)
-	endIso := time.Now().Add(defaultActivationDelay).Format(time.RFC3339)
+	// activation_date bilerek bos birakilir: host dugun tarihine gore kendisi secer.
+	// NULL kalinca trigger active_until/storage_until'i de hesaplamaz, misafir kapisi
+	// da kapali kalir (tarih yoksa "etkinlik henuz baslamadi" gosterilir).
 	status := "paid"
 
 	ib := sqlbuilder.NewInsertBuilder()
 	ib.InsertInto("events")
-	ib.Cols("admins", "activation_date", "active_until", "purchase_uid", "status")
+	ib.Cols("admins", "purchase_uid", "status")
 	ib.Values(
 		fmt.Sprintf(`{%s}`, userUid),
-		startIso,
-		endIso,
 		unpackedPurchaseUID,
 		status,
 	)
@@ -384,15 +378,11 @@ func (r signup_email_routes_typ) Attach(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	// Bkz. Post: varsayilan aktivasyon tarihi bilerek uzak tutulur.
-	defaultActivationDelay := 365 * 24 * time.Hour
-	startIso := time.Now().Add(defaultActivationDelay).Format(time.RFC3339)
-	endIso := time.Now().Add(defaultActivationDelay).Format(time.RFC3339)
-
+	// Bkz. Post: activation_date bilerek bos birakilir, host kendisi secer.
 	ib := sqlbuilder.NewInsertBuilder()
 	ib.InsertInto("events")
-	ib.Cols("admins", "activation_date", "active_until", "purchase_uid", "status")
-	ib.Values(fmt.Sprintf(`{%s}`, userUid), startIso, endIso, unpackedPurchaseUID, "paid")
+	ib.Cols("admins", "purchase_uid", "status")
+	ib.Values(fmt.Sprintf(`{%s}`, userUid), unpackedPurchaseUID, "paid")
 	ib.SQL("RETURNING uid")
 
 	eventRes, err := db.Query_one(ib)
