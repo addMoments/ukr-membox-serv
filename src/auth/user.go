@@ -50,6 +50,69 @@ func logGuestMetrics(eventUID string, source string) {
 	)
 }
 
+// participantNamespace, giris yapmis kullanicilar icin event bazli participant UID
+// uretiminde kullanilan sabit UUIDv5 namespace'idir.
+// DEGISTIRILMEMELI: degisirse mevcut kullanicilar yeni participant kimligi alir ve
+// eski paylasimlariyla baglari kopar.
+var participantNamespace = uuid.Must(uuid.Parse("b7c9e4f2-3a1d-4e88-9c05-6d2f8a3b5e71"))
+
+// resolveAuthParticipantUID, giris yapmis kullanicinin bu event'e ozel participant kaydini
+// bulur, yoksa olusturur.
+// Nasil: (userUID, eventUID) ciftinden deterministik bir UUIDv5 turetir. Bu event'te legacy
+// (uid = userUID) ya da turev kayit varsa onu kullanir, ikisi de yoksa turev UID ile ekler.
+// Neden: participants.uid primary key oldugu icin kullanicinin hesap UID'i yalnizca tek bir
+// event'e baglanabiliyordu; ikinci event'in misafir sayfasinda kayit hic olusmuyor,
+// host galeride ismi goremiyor ve misafir sayimi eksik kaliyordu.
+func resolveAuthParticipantUID(userUID string, eventUID string) (participantUID string, err error) {
+	derivedUID := uuid.NewSHA1(participantNamespace, []byte(userUID+":"+eventUID)).String()
+
+	// Legacy ve turev kayit ayni sorguda aranir; legacy oncelikli secilir ki bugune kadar
+	// userUID ile yazilmis kayitlar ve onlara bagli paylasimlar oldugu gibi korunsun.
+	sb := sqlbuilder.BuildNamed(`
+		SELECT uid
+		FROM participants
+		WHERE event_uid = ${event_uid}
+		  AND uid IN (${user_uid}, ${derived_uid})
+		ORDER BY (uid = ${user_uid}) DESC
+		LIMIT 1
+	`, map[string]interface{}{
+		"event_uid":   eventUID,
+		"user_uid":    userUID,
+		"derived_uid": derivedUID,
+	})
+
+	// Query_one satir bulamazsa hata dondurur; kayit olmamasi burada normal bir durum
+	// oldugu icin Query_all kullanilir.
+	rows, err := db.Query_all(sb)
+	if err != nil {
+		return "", utils.Tag_err("rap1", err)
+	}
+	if len(rows) > 0 && len(rows[0]) > 0 {
+		return string(rows[0][0]), nil
+	}
+
+	packedDerivedUID, err := utils.UUID.PackUUID(derivedUID)
+	if err != nil {
+		return "", utils.Tag_err("rap2", err)
+	}
+
+	ib := sqlbuilder.NewInsertBuilder()
+	ib.InsertInto("participants")
+	ib.Cols("uid", "name", "event_uid")
+	// "guest-" oneki anonim misafir akisiyla ayni format; frontend bu onekle baslayan
+	// otomatik isimleri kullaniciya gostermiyor.
+	ib.Values(derivedUID, "guest-"+packedDerivedUID, eventUID)
+	// Kolon belirtilmeyen bicim hem primary key hem UNIQUE(name, event_uid) cakismasini
+	// yutar; eszamanli iki istek yarissa bile hata uretmez.
+	ib.SQL("ON CONFLICT DO NOTHING")
+	err = db.Exec(ib)
+	if err != nil {
+		return "", utils.Tag_err("rap3", err)
+	}
+
+	return derivedUID, nil
+}
+
 func EmailExists(email string) (exists bool, err error) {
 	sb := sqlbuilder.NewSelectBuilder()
 	sb.Select("COUNT(*)").From("users").Where(sb.Equal("mail", email))
@@ -217,17 +280,21 @@ func AuthMiddleware(next http.HandlerFunc, role string) http.HandlerFunc {
 					return
 				} */
 
-				// Insert auth user into participants if not exists
-				ib := sqlbuilder.NewInsertBuilder()
-				ib.InsertInto("participants")
-				ib.Cols("uid", "name", "event_uid")
-				ib.Values(claims.UserUID, "admin", eventUID)
-				ib.SQL("ON CONFLICT (uid) DO NOTHING")
-				err = db.Exec(ib)
+				// Ne: Giris yapmis kullaniciyi bu event'e ozel participant kaydina baglar ve
+				//     istegin geri kalaninda hesap UID'i yerine o kaydin UID'ini kullandirir.
+				// Nasil: resolveAuthParticipantUID kaydi bulur veya olusturur; claims o UID ile devam eder.
+				//        /api/guest/whoami bunu "ui" olarak doner, /api/guest/upload ise client_uid olarak
+				//        kullanir. Frontend participant UID'ini zaten whoami'den aldigi icin degisiklik gerekmez.
+				// Neden: Hesap UID'i participants tablosunda primary key oldugundan kullanici yalnizca tek
+				//        bir event'e baglanabiliyordu; ikinci event'te kayit hic olusmuyordu.
+				var participantUID string
+				participantUID, err = resolveAuthParticipantUID(claims.UserUID, eventUID)
 				if err != nil {
 					err = utils.Tag_err("gu5", err)
 					return
 				}
+
+				claims.UserUID = participantUID
 
 				return
 			}
