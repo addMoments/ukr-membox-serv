@@ -736,6 +736,25 @@ func (rfrnc product_routes_typ) AdminUpdateProduct(w http.ResponseWriter, r *htt
 		assignments = append(assignments, ub.Assign("price", priceVal))
 	}
 
+	// Ne: Kartlarin sirasini belirleyen priority alanini admin panelinden duzenlenebilir kilar.
+	// Nasil: Sayi olarak okur, tam sayiya yuvarlar ve 1'in altini reddeder.
+	// Neden: Listeler `ORDER BY priority DESC` ile siralaniyor ama public urun sorgusu ayni
+	//        zamanda `priority > 0` filtreliyor -- 0 yazan bir admin urunu siteden sessizce
+	//        kaldirmis olurdu. Gizleme isi is_enabled'in, siralama priority'nin.
+	if priorityVal, hasPriority, parseErr := getFirstFloatField(req, "priority"); hasPriority {
+		if parseErr != nil {
+			stat_code = 400
+			err = parseErr
+			return
+		}
+		if priorityVal < 1 {
+			stat_code = 400
+			err = errors.New("priority must be >= 1 (use is_enabled to hide a product)")
+			return
+		}
+		assignments = append(assignments, ub.Assign("priority", int(priorityVal)))
+	}
+
 	displayNameEN, hasDisplayNameEN := getFirstStringField(req, "display_name_en")
 	displayNameUK, hasDisplayNameUK := getFirstStringField(req, "display_name_uk")
 	commonName, hasCommonName := getFirstStringField(req, "name", "package_name", "add_on_name")
