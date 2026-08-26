@@ -1238,6 +1238,11 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 	cart := types.Cart{}
 	cartUID, cartItems, err := cart.InsertQuantityMapWithConfigs(req.Purchase_info, req.Buyer_configs)
 	if err != nil {
+		// Adet kurali ihlali istemci hatasi: 500 degil 422 don, boylece istemci mesaji
+		// gosterebilsin ve hata takibinde gercek sunucu hatalariyla karismasin.
+		if types.IsQuantityRuleError(err) {
+			stat_code = http.StatusUnprocessableEntity
+		}
 		err = utils.Tag_err("mce4", err)
 		return
 	}

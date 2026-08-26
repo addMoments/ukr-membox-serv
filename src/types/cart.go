@@ -37,15 +37,31 @@ func (c *Cart) InsertQuantityMapWithConfigs(quantityMap map[string]int, buyerCon
 	}
 
 	sb := sqlbuilder.NewSelectBuilder()
-	sb.Select("id", "uid").From("products").Where(sb.In("id", db_layer.Interface_ar(productIDs)...))
+	sb.Select("id", "uid", "is_add_on").From("products").Where(sb.In("id", db_layer.Interface_ar(productIDs)...))
 	res, err := db_layer.Query_all(sb)
 	if err != nil {
 		return
 	}
 
 	idUidMap := make(map[string]string)
+	isAddOnMap := make(map[string]bool)
 	for _, row := range res {
-		idUidMap[string(row[0])] = string(row[1])
+		productID := string(row[0])
+		idUidMap[productID] = string(row[1])
+		// is_add_on nullable; NULL bos byte dizisi olarak gelir ve false'a duser -- dogru varsayilan.
+		isAddOnMap[productID] = string(row[2]) == "true"
+	}
+
+	// Adet kurallarini sepet olusturmadan once dogrula: bir satir bile kurala uymuyorsa
+	// istegin tamami reddedilsin ve arkada yetim bir carts kaydi kalmasin.
+	for productID, quantity := range quantityMap {
+		if _, ok := idUidMap[productID]; !ok {
+			err = fmt.Errorf("product not found: %s", productID)
+			return
+		}
+		if err = ValidateQuantity(productID, isAddOnMap[productID], quantity); err != nil {
+			return
+		}
 	}
 
 	ib := sqlbuilder.NewInsertBuilder()
