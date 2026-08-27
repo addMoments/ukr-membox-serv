@@ -12,7 +12,7 @@ func TestValidateQuantity(t *testing.T) {
 		quantity  int
 		wantErr   bool
 	}{
-		// Paket add-on'lar: en az 4, 4'un katlari.
+		// QR kart: en az 4, 4'un katlari.
 		{"qr card 4", "printedBanner", true, 4, false},
 		{"qr card 8", "printedBanner", true, 8, false},
 		{"qr card 12", "printedBanner", true, 12, false},
@@ -21,10 +21,14 @@ func TestValidateQuantity(t *testing.T) {
 		{"qr card 6 reddedilir", "printedBanner", true, 6, true},
 		{"qr card 0 reddedilir", "printedBanner", true, 0, true},
 		{"qr card negatif reddedilir", "printedBanner", true, -4, true},
+
+		// Welcome Board: en az 1, birer birer artar.
+		{"welcome board 1", "welcome_board", true, 1, false},
+		{"welcome board 2", "welcome_board", true, 2, false},
+		{"welcome board 3", "welcome_board", true, 3, false},
 		{"welcome board 4", "welcome_board", true, 4, false},
-		{"welcome board 2 reddedilir", "welcome_board", true, 2, true},
-		{"easel 4", "aesel", true, 4, false},
-		{"easel 1 reddedilir", "aesel", true, 1, true},
+		{"welcome board 0 reddedilir", "welcome_board", true, 0, true},
+		{"welcome board negatif reddedilir", "welcome_board", true, -1, true},
 
 		// Tek adetlik add-on'lar: tam olarak 1.
 		{"audio guestbook 1", "audioGuestbook", true, 1, false},

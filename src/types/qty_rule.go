@@ -8,9 +8,9 @@ import (
 // Ne: Bir urunun satis adedi kurallarini ve bu kurallara uymayan sepet satirlarini
 //     reddeden dogrulamayi tutar.
 // Nasil: Kural urun kaydindan degil koddan geliyor; frontend'deki birebir karsiligi
-//        ukr-membox/src/client/cart.ts -> getQtyRule / SINGLE_QUANTITY_ADDON_IDS.
-//        Iki taraf birlikte degistirilmeli, aksi halde tarayicida gecen sepet
-//        sunucuda reddedilir.
+//        ukr-membox/src/client/cart.ts -> getQtyRule / SINGLE_QUANTITY_ADDON_IDS /
+//        PACK_QTY_ADDON_IDS. Iki taraf birlikte degistirilmeli, aksi halde tarayicida
+//        gecen sepet sunucuda reddedilir.
 // Neden: Bu dosya eklenene kadar adet yalnizca tarayicida dogrulaniyordu. /purchase'a
 //        dogrudan istek atan biri 0, 3 ya da negatif adet gonderebiliyor; istek
 //        fiyatlanip odemeye ve Nova Poshta irsaliyesine kadar gidiyordu.
@@ -23,7 +23,12 @@ var singleQuantityAddonIDs = map[string]bool{
 	"sponsored":      true,
 }
 
-// Paket add-on'lar (QR Card, Welcome Board, easel) 4'luk bloklar halinde satiliyor.
+// 4'luk bloklar halinde basilan add-on'lar. Yalnizca QR kart; Welcome Board birer birer satilir.
+var packQtyAddonIDs = map[string]bool{
+	"printedBanner": true,
+}
+
+// QR kart tek sayfaya 4 adet basildigi icin 4'luk bloklar halinde satiliyor.
 const PackQtyStep = 4
 
 // Tek bir sepet satirindaki azami adet. Is kurali degil tasma korumasi: price * quantity
@@ -49,9 +54,9 @@ func IsQuantityRuleError(err error) bool {
 }
 
 // QtyRule, urunun en az kac adet satildigini ve kacar kacar arttigini doner.
-// Paket add-on'lar 4/4; digerleri (paketler ve tek adetlik add-on'lar) 1/1.
+// 4'luk basilan add-on'lar 4/4; digerleri (paketler, Welcome Board, tek adetlik add-on'lar) 1/1.
 func QtyRule(productID string, isAddOn bool) (min int, step int) {
-	if isAddOn && !singleQuantityAddonIDs[productID] {
+	if isAddOn && packQtyAddonIDs[productID] {
 		return PackQtyStep, PackQtyStep
 	}
 	return 1, 1
