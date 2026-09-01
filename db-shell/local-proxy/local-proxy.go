@@ -103,23 +103,37 @@ func createReverseProxy(targetURL *url.URL, config *Config) *httputil.ReversePro
 // authMiddleware validates tokens and sets Authorization header for PostgREST
 func authMiddleware(next http.Handler, config *Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Ne: Reddedilen isteklerin hepsi "Auth FAIL" olarak loglanir.
+		// Nasil: reason + method + path + client IP yazilir; token'in kendisi ASLA loglanmaz.
+		// Neden: Asagidaki uc dal sessizce 401 donuyordu. Token'i saklayamayan misafirler
+		//        (IndexedDB kapali: Safari gizli mod, uygulama ici tarayicilar) tam olarak
+		//        ilk dala dusuyor ve istek hicbir yerde iz birakmadan reddediliyordu;
+		//        frontend de bunu 404 sayfasina cevirdigi icin sikayet teshis edilemiyordu.
+		denied := func(reason string) {
+			log.Printf("Auth FAIL: reason=%s method=%s path=%s ip=%s",
+				reason, r.Method, r.URL.Path, auth.GetClientIP(r))
+			http.Error(w, reason, http.StatusUnauthorized)
+		}
+
 		// Extract token from Authorization header
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			http.Error(w, "authorization header required", http.StatusUnauthorized)
+			denied("authorization header required")
 			return
 		}
 
 		// Expect "Bearer <token>" format
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			http.Error(w, "invalid authorization header format", http.StatusUnauthorized)
+			denied("invalid authorization header format")
 			return
 		}
 
 		token := parts[1]
 		if token == "" {
-			http.Error(w, "token not found"+authHeader, http.StatusUnauthorized)
+			// Onceden yanit govdesine authHeader ekleniyordu; header'i istemciye geri
+			// yansitmak gereksiz, sabit metin yeterli.
+			denied("token not found")
 			return
 		}
 
@@ -127,8 +141,7 @@ func authMiddleware(next http.Handler, config *Config) http.HandlerFunc {
 		clientIP := auth.GetClientIP(r)
 		claims, err := auth.ValidateToken(token, clientIP, config.JwtSecret)
 		if err != nil {
-			log.Printf("Token validation failed: %v", err)
-			http.Error(w, err.Error(), http.StatusUnauthorized)
+			denied("token validation failed: " + err.Error())
 			return
 		}
 
