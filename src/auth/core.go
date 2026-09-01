@@ -140,9 +140,15 @@ func ValidateToken(encToken, clientIP string) (claims TokenClaims, err error) {
 		return
 	}
 
-	if claims.Role == "auth" && (claims.IP != "" && claims.IP != clientIP) {
-		err = errors.New("ip address mismatch")
-		return
-	}
+	// Ne: Token'in client IP'sine baglanmasi kaldirildi; clientIP parametresi
+	//     cagiranlarin imzasini bozmamak icin duruyor, dogrulamada kullanilmiyor.
+	// Nasil: claims.IP token'a hala yaziliyor (log/teshis icin), yalnizca
+	//        karsilastirma yapilmiyor.
+	// Neden: Mobil sebekede (CGNAT) IP gun icinde birkac kez degisiyor; 7 gunluk
+	//        token her degisimde gecersiz gorunup kullaniciyi /signin'e dusuruyordu.
+	//        Sifresini hatirlamayan musteriler bu yuzden sifre sifirlama dongusune
+	//        giriyordu - bir hesapta 1 ayda 10 sifirlama olustu.
+	//        db-shell/local-proxy tarafinda ayni kontrol zaten devre disiydi;
+	//        iki servis artik tutarli davraniyor.
 	return
 }

@@ -20,6 +20,12 @@ type password_reset_routes_typ struct{}
 
 var PasswordResetRoutes password_reset_routes_typ
 
+// resetTokenLife, sifre sifirlama linkinin gecerlilik suresi.
+// 15 dakikaydi; ukr.net gibi saglayicilarda teslimat gecikince kullanicilar linki
+// suresi dolmus buluyor ve tekrar istek atiyordu. Sureyi 60 dakikaya cikardik.
+// E-posta metni ve /recover sayfasindaki bilgilendirme bu degerle ayni kalmali.
+const resetTokenLife = 60 * time.Minute
+
 type passwordResetRequestBody struct {
 	Email string `json:"email"`
 }
@@ -49,7 +55,7 @@ func (rfrnc password_reset_routes_typ) Request(w http.ResponseWriter, r *http.Re
 	userUID := string(res[0])
 
 	token := mycrypto.Rand_Str(32, "")
-	expiresAt := time.Now().Add(15 * time.Minute).Format(time.RFC3339)
+	expiresAt := time.Now().Add(resetTokenLife).Format(time.RFC3339)
 
 	ib := sqlbuilder.NewInsertBuilder()
 	ib.InsertInto("password_reset_tokens")
@@ -69,7 +75,7 @@ func (rfrnc password_reset_routes_typ) Request(w http.ResponseWriter, r *http.Re
 	go func() {
 		mailErr := sendemail.Info_mail.Send([]string{req.Email}, "Reset your Add Moments password", func(w io.WriteCloser) {
 			sendemail.Write_html(w, "Reset your password", []string{
-				"We received a request to reset your password. Click the button below to choose a new one. This link expires in 15 minutes.",
+				"We received a request to reset your password. Click the button below to choose a new one. This link expires in 60 minutes.",
 				sendemail.Button(resetLink, "Reset Password"),
 				"If you didn't request this, you can safely ignore this email. Your password won't change.",
 				"If the button doesn't work, copy and paste this link into your browser:<br>" + resetLink,
