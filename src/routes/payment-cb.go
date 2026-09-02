@@ -121,6 +121,7 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 			Buttons: []types.MessageScreenButton{
 				{Text: "Sign up now", Href: signup_url},
 			},
+			Link:    signup_url,
 			Warning: "Transaction ID: " + packedPurchaseUID,
 			Image:   "https://addmoments.com.ua/ui/assets/checkmark.svg",
 		}
@@ -324,6 +325,7 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 		Buttons: []types.MessageScreenButton{
 			{Text: "Sign up now", Href: signup_url},
 		},
+		Link:    signup_url,
 		Warning: "Transaction ID: " + packedPurchaseUID,
 		Image:   "https://addmoments.com.ua/ui/assets/checkmark.svg",
 	}

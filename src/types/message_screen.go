@@ -12,6 +12,9 @@ type MessageScreen struct {
 	Buttons []MessageScreenButton `json:"buttons,omitempty"`
 	Image   string                `json:"image,omitempty"`
 	Warning string                `json:"warning,omitempty"`
+	// Link: notice ekraninda QR kod ve kopyalanabilir metin olarak gosterilir.
+	// QR frontend'de uretilir; buraya data-URI konmaz, base64 payload sismesin.
+	Link string `json:"link,omitempty"`
 }
 
 type MessageScreenButton struct {
