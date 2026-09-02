@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	db "membox-serv/src/db_layer"
 	dbscripts "membox-serv/src/db_scripts"
 	"membox-serv/src/env"
@@ -134,11 +135,24 @@ func AuthMiddleware(next http.HandlerFunc, role string) http.HandlerFunc {
 		var redr_url string
 
 		defer (func() {
+			// Ne: Reddedilen her istek tek satir halinde loglanir.
+			// Nasil: sebep + istenen rol + method + path + X-Event + client IP yazilir;
+			//        token ve claim icerigi ASLA loglanmaz.
+			// Neden: Asagidaki dallarin hepsi yaniti istemciye yollayip sunucuda hicbir iz
+			//        birakmiyordu. "QR okutunca 404" sikayeti bu yuzden loglardan teshis
+			//        edilemedi; local-proxy'de ayni bosluk 6976cf3 ile kapatilmisti.
+			logDenied := func(reason string) {
+				log.Printf("AuthMiddleware DENY: reason=%s want_role=%s method=%s path=%s event=%s ip=%s",
+					reason, role, r.Method, r.URL.Path, r.Header.Get("X-Event"), GetClientIP(r))
+			}
+
 			if redr_url != "" {
+				logDenied("redirect:" + redr_url)
 				http.Redirect(w, r, redr_url, http.StatusTemporaryRedirect)
 				return
 			}
 			if err != nil {
+				logDenied(err.Error())
 				if errors.Is(err, ErrPackageLimitExceeded) {
 					_ = networkutils.SendErrorJSON(
 						w,
@@ -193,24 +207,19 @@ func AuthMiddleware(next http.HandlerFunc, role string) http.HandlerFunc {
 					return
 				}
 
-				fmt.Println("sd;fijseventUID")
 
 				is_live := false
 				is_live, err = dbscripts.Is_event_live(eventUID)
 				if err != nil {
-					fmt.Println("22sd;fijseventUdsfojID", err, is_live)
 					err = utils.Tag_err("gu4", err)
 					return
 				}
 
-				fmt.Println("sd;fijseventUdsfojID", is_live, err)
 				if !is_live {
 					err = errors.New("event is not live")
 					return
 				}
-				fmt.Println("sd;fi111jseventUID")
 				claims, _, err = Authorize(w, r, role, "", eventPackedUID)
-				fmt.Println("sd;fi111jseventUID", claims, err)
 				return
 			}
 
@@ -248,9 +257,15 @@ func AuthMiddleware(next http.HandlerFunc, role string) http.HandlerFunc {
 			return
 		}
 
-		fmt.Println(claims.Role, role)
-
 		if claims.Role != role {
+			// Ne: Token rolu ile ucun bekledigi rol uyusmadiginda tek satir yazar.
+			// Neden: Eskiden burada her istekte "auth auth" gibi baglamsiz bir satir
+			//        cikiyordu; asil ilginc olan uyusmazlik ise hangi event'e ait oldugu
+			//        belli olmadan geciyordu. Giris yapmis kullanicinin misafir sayfasina
+			//        gelmesi tam olarak bu satirla tespit edildi.
+			log.Printf("AuthMiddleware role mismatch: token_role=%s want_role=%s path=%s event=%s",
+				claims.Role, role, r.URL.Path, r.Header.Get("X-Event"))
+
 			if role == "webanon" && claims.Role == "auth" {
 				eventPackedUID := r.Header.Get("X-Event")
 				eventUID := ""
