@@ -311,13 +311,7 @@ func (cr collaborator_routes_typ) New(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("[collab.New] token encrypted OK, checking SMTP connection\n")
-
-	if connErr := sendemail.Info_mail.CheckConn(); connErr != nil {
-		fmt.Printf("[collab.New] SMTP connection unhealthy (%v), will attempt reconnect on send\n", connErr)
-	} else {
-		fmt.Printf("[collab.New] SMTP connection OK\n")
-	}
+	fmt.Printf("[collab.New] token encrypted OK\n")
 
 	signupLink := "https://addmoments.com.ua/signup/" + encPaymentTkn
 	fmt.Printf("[collab.New] sending invite email to=%s link=%s\n", req.Email, signupLink)

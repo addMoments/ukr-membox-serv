@@ -58,16 +58,6 @@ func mail_template(
                                         </td>
                                     </tr>
                                 </table>
-                                <!-- Footer -->
-                                <table width="100%" border="0" cellpadding="0" cellspacing="0" style="padding-top: 20px;">
-                                    <tr>
-                                        <td style="text-align: center; font-size: 12px; line-height: 18px; font-family: Poppins, sans-serif; color: #666666; padding: 20px;">
-                                            © 2024 Nanbis Ltd., Tum haklari saklidir.
-                                            <br>
-                                            <a href="https://kakooo.co/privacy/tr" style="color: #666666; text-decoration: underline;">Gizlilik sozlesmesi</a>
-                                        </td>
-                                    </tr>
-                                </table>
                             </td>
                         </tr>
                     </table>
