@@ -14,6 +14,7 @@ import (
 	"membox-serv/src/utils"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -778,6 +779,69 @@ func (o order_routes_typ) RetryWaybill(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(200)
 	w.Write([]byte("waybill created successfully"))
+}
+
+// POST /api/admin/orders/{purchaseUID}/resend-activation
+// Ne: Bir siparisin aktivasyon (signup) mailini yeniden gonderir.
+// Nasil: Odeme callback'inin kullandigi ayni linki ve ayni metni uretip yollar.
+// Neden: Mail alicinin tarafinda kaybolabiliyor (spam klasoru, sunucu reddi) ve bugune
+//
+//	kadar destegin elinde hicbir yol yoktu; musteri hesabini hic kuramiyordu.
+func (o order_routes_typ) ResendActivation(w http.ResponseWriter, r *http.Request) {
+	purchaseUID := mux.Vars(r)["purchaseUID"]
+
+	sb := sqlbuilder.NewSelectBuilder()
+	sb.Select("COALESCE(provider_id, '')", "purchase_info").From("purchases").Where(sb.Equal("uid", purchaseUID))
+	res, err := db.Query_one(sb)
+	if err != nil {
+		http.Error(w, "order not found", http.StatusNotFound)
+		return
+	}
+
+	// Odeme tamamlanmadiysa ortada gonderilecek bir aktivasyon linki yok.
+	providerID := string(res[0])
+	if providerID == "" {
+		http.Error(w, "payment has not been confirmed yet", http.StatusConflict)
+		return
+	}
+	if strings.HasPrefix(providerID, "failed:") {
+		http.Error(w, "payment failed, there is no activation link for this order", http.StatusConflict)
+		return
+	}
+
+	purchaseInfo := types.Js_object{}
+	if err := json.Unmarshal(res[1], &purchaseInfo); err != nil {
+		http.Error(w, "could not read the order", http.StatusInternalServerError)
+		return
+	}
+
+	email, _ := purchaseInfo["email"].(string)
+	if email == "" {
+		http.Error(w, "order has no buyer email", http.StatusConflict)
+		return
+	}
+
+	packedUID, err := utils.UUID.PackUUID(purchaseUID)
+	if err != nil {
+		http.Error(w, "invalid order id", http.StatusBadRequest)
+		return
+	}
+
+	signupURL, err := activationSignupURL(packedUID, email)
+	if err != nil {
+		http.Error(w, "could not build the activation link", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Printf("[order.resend] purchase=%s to=%s\n", purchaseUID, email)
+
+	if mailErr := sendActivationMail(email, signupURL); mailErr != nil {
+		fmt.Printf("[order.resend] ERROR: purchase=%s to=%s err=%v\n", purchaseUID, email, mailErr)
+		http.Error(w, "the email could not be sent", http.StatusBadGateway)
+		return
+	}
+
+	networkutils.SendJson(types.Js_object{"ok": true, "email": email}, w)
 }
 
 // GET /api/admin/check

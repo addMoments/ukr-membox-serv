@@ -3,12 +3,10 @@ package routes
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	db "membox-serv/src/db_layer"
 	"membox-serv/src/env"
 	"membox-serv/src/mycrypto"
 	"membox-serv/src/payments"
-	sendemail "membox-serv/src/send_email"
 	"membox-serv/src/types"
 	"membox-serv/src/utils"
 	"net/http"
@@ -339,13 +337,7 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 	redr_url = "/notice/" + encodedMsgScreen
 
 	fmt.Println("sending email to ", decEmail)
-	emailErr := sendemail.Info_mail.Send([]string{decEmail}, "Add Moments Payment Confirmation", func(w io.WriteCloser) {
-		sendemail.Write_html(w, "Thank you for your payment!", []string{
-			"Your order has been confirmed. Click the button below to set up your account and access your event.",
-			sendemail.Button(signup_url, "Set Up My Account"),
-			"If the button doesn't work, copy and paste this link into your browser:<br>" + signup_url,
-		})
-	}, nil)
+	emailErr := sendActivationMail(decEmail, signup_url)
 	if emailErr != nil {
 		fmt.Println("email send error (non-fatal): ", emailErr)
 	}

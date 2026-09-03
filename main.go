@@ -187,6 +187,7 @@ func main() {
 	apiRoutes.HandleFunc("/admin/promos/{promoUID}", auth.SuperAdminMiddleware(routes.AdminPromoRoutes.Delete)).Methods("DELETE")
 	apiRoutes.HandleFunc("/admin/orders/items/{cartItemUID}/retry-waybill", auth.SuperAdminMiddleware(routes.OrderRoutes.RetryWaybill)).Methods("POST")
 	apiRoutes.HandleFunc("/admin/orders/items/{cartItemUID}", auth.SuperAdminMiddleware(routes.OrderRoutes.UpdateItem)).Methods("PATCH")
+	apiRoutes.HandleFunc("/admin/orders/{purchaseUID}/resend-activation", auth.OrderPanelMiddleware(routes.OrderRoutes.ResendActivation)).Methods("POST")
 	apiRoutes.HandleFunc("/admin/orders/{purchaseUID}", auth.OrderPanelMiddleware(routes.OrderRoutes.GetOrder)).Methods("GET")
 	apiRoutes.HandleFunc("/admin/orders", auth.OrderPanelMiddleware(routes.OrderRoutes.ListOrders)).Methods("GET")
 	apiRoutes.HandleFunc("/event/{eventPackedUID}/order/items/{cartItemUID}", auth.AuthMiddleware(routes.OrderRoutes.SubmitBuyerConfig, "auth")).Methods("PATCH")
