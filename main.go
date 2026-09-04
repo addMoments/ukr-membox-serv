@@ -170,6 +170,9 @@ func main() {
 
 	// Order management — register specific paths before parameterized ones
 	apiRoutes.HandleFunc("/admin/check", routes.OrderRoutes.AdminCheck).Methods("GET")
+	apiRoutes.HandleFunc("/admin/events", auth.SuperAdminMiddleware(routes.AdminEventRoutes.List)).Methods("GET")
+	apiRoutes.HandleFunc("/admin/events/{eventUID}", auth.SuperAdminMiddleware(routes.AdminEventRoutes.UpdateActivationDate)).Methods("PATCH")
+	apiRoutes.HandleFunc("/admin/events/{eventUID}", auth.SuperAdminMiddleware(routes.AdminEventRoutes.Delete)).Methods("DELETE")
 	apiRoutes.HandleFunc("/admin/panel-admins", auth.SuperAdminMiddleware(routes.PanelAdminRoutes.List)).Methods("GET")
 	apiRoutes.HandleFunc("/admin/panel-admins", auth.SuperAdminMiddleware(routes.PanelAdminRoutes.Create)).Methods("POST")
 	apiRoutes.HandleFunc("/admin/panel-admins/{userUID}", auth.SuperAdminMiddleware(routes.PanelAdminRoutes.Delete)).Methods("DELETE")
