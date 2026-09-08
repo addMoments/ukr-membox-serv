@@ -96,10 +96,44 @@ func (er event_routes_typ) Stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Medya ve depolama kullanimi + limitleri (Excel madde 2.17). Tanimsiz limit -1 doner
+	// ve frontend bunu "sinirsiz" olarak gosterir.
+	mediaCount := 0
+	mediaCount, err = dbscripts.Event_media_count(eventUID)
+	if err != nil {
+		err = utils.Tag_err("evs6", err)
+		return
+	}
+
+	mediaLimit := -1
+	if v, defined, limErr := dbscripts.Event_option_number(eventUID, "media_count"); limErr == nil && defined {
+		mediaLimit = int(v)
+	}
+
+	storageBytes := int64(0)
+	storageBytes, err = dbscripts.Event_storage_bytes(eventUID)
+	if err != nil {
+		err = utils.Tag_err("evs7", err)
+		return
+	}
+
+	optionOrUnlimited := func(key string) float64 {
+		if v, defined, limErr := dbscripts.Event_option_number(eventUID, key); limErr == nil && defined {
+			return v
+		}
+		return -1
+	}
+
 	payload = map[string]interface{}{
-		"contributor_count": contributorCount,
-		"guest_count":       guestCount,
-		"guest_limit":       guestLimit,
+		"contributor_count":      contributorCount,
+		"guest_count":            guestCount,
+		"guest_limit":            guestLimit,
+		"media_count":            mediaCount,
+		"media_limit":            mediaLimit,
+		"storage_bytes":          storageBytes,
+		"storage_limit_gb":       optionOrUnlimited("storage_gb"),
+		"guest_media_limit":      optionOrUnlimited("guest_media_count"),
+		"guest_storage_limit_gb": optionOrUnlimited("guest_storage_gb"),
 	}
 	log.Printf(
 		"[event.stats] event_packed_uid=%s event_uid=%s contributor_count=%d guest_count=%d guest_limit=%d",

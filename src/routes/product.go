@@ -1004,6 +1004,33 @@ func (rfrnc product_routes_typ) AdminUpdateProduct(w http.ResponseWriter, r *htt
 		optionsChanged = true
 	}
 
+	// Yukleme limitleri (Excel madde 2.17). Uc alan da -1 ile sinirsiz yapilabilir.
+	for _, f := range []struct {
+		field  string
+		option string
+	}{
+		{"storage_gb", "storage_gb"},
+		{"guest_media_count", "guest_media_count"},
+		{"guest_storage_gb", "guest_storage_gb"},
+	} {
+		value, has, parseErr := getFirstIntField(req, f.field)
+		if !has {
+			continue
+		}
+		if parseErr != nil {
+			stat_code = 400
+			err = parseErr
+			return
+		}
+		if value < -1 {
+			stat_code = 400
+			err = errors.New(f.field + " must be >= -1")
+			return
+		}
+		options[f.option] = value
+		optionsChanged = true
+	}
+
 	if optionsChanged {
 		assignments = append(assignments, ub.Assign("options", options.Json()))
 	}

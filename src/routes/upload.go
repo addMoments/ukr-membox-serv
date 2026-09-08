@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"membox-serv/src/auth"
 	db "membox-serv/src/db_layer"
 	dbscripts "membox-serv/src/db_scripts"
@@ -149,6 +150,13 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 
 	defer (func() {
 		if err != nil {
+			// Ne: Limit hatalari duz metin yerine kodlu JSON doner.
+			// Neden: Frontend "paket doldu" ile "bir sey ters gitti" arasindaki farki
+			//        gosterebilsin; eskiden hepsi ayni genel 403 mesajina dusuyordu.
+			if code, msg, ok := uploadLimitError(err); ok {
+				_ = networkutils.SendErrorJSON(w, http.StatusForbidden, code, msg)
+				return
+			}
 			if stat_code == 0 {
 				stat_code = 500
 			}
@@ -193,11 +201,19 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	reqData := []string{}
-	err = json.NewDecoder(r.Body).Decode(&reqData)
+	// Ne: Istek govdesi ya eski bicim ["a.jpg"] ya da yeni bicim [{"name":"a.jpg","size":123}].
+	// Neden: Backend frontend'den once deploy ediliyor; o pencerede eski arayuz hala
+	//        duz isim dizisi gonderiyor ve yuklemeler kirilmamali. Boyut bildirilmezse
+	//        0 sayilir, yani depolama limitine katkisi olmaz.
+	reqData, fileSizes, err := decodeUploadRequest(r)
 	if err != nil {
 		err = utils.Tag_err("gu2", err)
 		return
+	}
+
+	var totalBytes int64
+	for _, name := range reqData {
+		totalBytes += fileSizes[name]
 	}
 
 	// Ne: Yuklemenin gidecegi album. ?album=<packedAlbumUid> verilmezse General.
@@ -238,10 +254,13 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	err = dbscripts.Check_media_limit(eventUID, len(reqData))
+	// Etkinlik ve misafir bazli dort limit (medya adedi, depolama, misafir adedi, misafir boyutu).
+	err = dbscripts.Check_upload_limits(eventUID, claims.UserUID, len(reqData), totalBytes)
 	if err != nil {
 		stat_code = http.StatusForbidden
-		err = utils.Tag_err("gu2.1", err)
+		if _, _, ok := uploadLimitError(err); !ok {
+			err = utils.Tag_err("gu2.1", err)
+		}
 		return
 	}
 
@@ -249,7 +268,11 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 	err = dbscripts.Check_contributor_limit_for_upload(eventUID, claims.UserUID)
 	if err != nil {
 		stat_code = http.StatusForbidden
-		err = utils.Tag_err("gu2.2", err)
+		// Tag_err yeni bir hata uretir ve errors.Is zincirini koparir; limit hatasini
+		// oldugu gibi birakiyoruz ki defer onu CONTRIBUTOR_LIMIT_REACHED koduna cevirebilsin.
+		if _, _, ok := uploadLimitError(err); !ok {
+			err = utils.Tag_err("gu2.2", err)
+		}
 		return
 	}
 
@@ -292,6 +315,7 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 		"event_uid",
 		"value",
 		"album_uid",
+		"size_bytes",
 	)
 
 	for i := 0; i < len(reqData); i++ {
@@ -306,6 +330,7 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 			eventUID,
 			pathF(reqData[i]),
 			albumVal,
+			fileSizes[reqData[i]],
 		)
 	}
 
@@ -428,4 +453,62 @@ func (ur upload_routes_typ) Delete(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 	}
 	stat_code = http.StatusOK
+}
+
+// uploadFileRequest, yeni istek biciminin tek ogesi: dosya adi ve istemcinin bildirdigi boyut.
+type uploadFileRequest struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+}
+
+// decodeUploadRequest, misafir presign govdesini iki bicimde de okur:
+// eski ["a.jpg"] ve yeni [{"name":"a.jpg","size":123}].
+// Donen map dosya adindan boyuta; bildirilmeyen boyut 0'dir.
+func decodeUploadRequest(r *http.Request) (names []string, sizes map[string]int64, err error) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	sizes = map[string]int64{}
+
+	var withSizes []uploadFileRequest
+	if json.Unmarshal(raw, &withSizes) == nil && len(withSizes) > 0 && withSizes[0].Name != "" {
+		for _, f := range withSizes {
+			if f.Name == "" {
+				return nil, nil, errors.New("file name is required")
+			}
+			if f.Size < 0 {
+				return nil, nil, errors.New("file size cannot be negative")
+			}
+			names = append(names, f.Name)
+			sizes[f.Name] = f.Size
+		}
+		return names, sizes, nil
+	}
+
+	if err = json.Unmarshal(raw, &names); err != nil {
+		return nil, nil, err
+	}
+	for _, n := range names {
+		sizes[n] = 0
+	}
+	return names, sizes, nil
+}
+
+// uploadLimitError, limit hatalarini frontend'in tanidigi koda ve mesaja cevirir.
+func uploadLimitError(err error) (code string, message string, ok bool) {
+	switch {
+	case errors.Is(err, dbscripts.ErrGuestLimitReached):
+		return "CONTRIBUTOR_LIMIT_REACHED", "Contributor limit reached for this event.", true
+	case errors.Is(err, dbscripts.ErrMediaLimitReached):
+		return "MEDIA_LIMIT_REACHED", "This event has reached its media limit.", true
+	case errors.Is(err, dbscripts.ErrStorageLimitReached):
+		return "STORAGE_LIMIT_REACHED", "This event has reached its storage limit.", true
+	case errors.Is(err, dbscripts.ErrGuestMediaLimitReached):
+		return "GUEST_MEDIA_LIMIT_REACHED", "You have reached the number of files you can upload to this event.", true
+	case errors.Is(err, dbscripts.ErrGuestStorageLimitReached):
+		return "GUEST_STORAGE_LIMIT_REACHED", "You have reached the total upload size allowed for this event.", true
+	}
+	return "", "", false
 }
