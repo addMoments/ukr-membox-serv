@@ -18,6 +18,12 @@ type TokenClaims struct {
 	Exp     int64  `json:"exp"`
 	IP      string `json:"ip"`
 	Iat     int64  `json:"iat"`
+	// Ev: misafir token'inin bagli oldugu etkinlik (UUID). PostgREST RLS'i
+	// current_guest_event_uid() ile okur (3-albums.sql). Host token'inda bos.
+	Ev string `json:"ev,omitempty"`
+	// Al: misafirin linkten/passcode ile actigi private-protected album UID'leri.
+	// PostgREST current_guest_albums() ile okur. Public albumler burada tutulmaz.
+	Al []string `json:"al,omitempty"`
 }
 
 func (c *TokenClaims) ToMapClaims() *jwt.MapClaims {
@@ -28,8 +34,24 @@ func (c *TokenClaims) ToMapClaims() *jwt.MapClaims {
 		"ip":   c.IP,
 		"iat":  c.Iat,
 	}
+	if c.Ev != "" {
+		claims["ev"] = c.Ev
+	}
+	if len(c.Al) > 0 {
+		claims["al"] = c.Al
+	}
 
 	return &claims
+}
+
+// HasAlbum, album UID'inin token'da acilmis listede olup olmadigini soyler.
+func (c *TokenClaims) HasAlbum(albumUID string) bool {
+	for _, a := range c.Al {
+		if a == albumUID {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *TokenClaims) FromMapClaims(m jwt.MapClaims) (err error) {
@@ -59,6 +81,18 @@ func (c *TokenClaims) FromMapClaims(m jwt.MapClaims) (err error) {
 		Exp:     int64(exp),
 		IP:      m["ip"].(string),
 		Iat:     int64(iat),
+	}
+
+	// ev / al opsiyonel: eski misafir token'larinda yok, host token'inda hic olmaz.
+	if ev, ok := m["ev"].(string); ok {
+		c.Ev = ev
+	}
+	if rawAl, ok := m["al"].([]interface{}); ok {
+		for _, item := range rawAl {
+			if s, ok := item.(string); ok && s != "" {
+				c.Al = append(c.Al, s)
+			}
+		}
 	}
 
 	return

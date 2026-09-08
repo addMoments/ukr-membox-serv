@@ -77,9 +77,9 @@ func GenerateQR(url string, opts ...standard.ImageOption) (result io.Reader, err
 	return
 }
 
-func UpdateEventQR(packedEventUID string, opts ...standard.ImageOption) (err error) {
-	refEventUID := packedEventUID
-	qrUrl := "https://" + env.Env().ServRoot + "/l/q" + refEventUID
+// UpdateQR, verilen URL icin QR uretip S3'te s3Path'e yazar.
+// Etkinlik ve album QR'lari ayni yoldan gecer; yalnizca hedef URL ve dosya yolu degisir.
+func UpdateQR(qrUrl string, s3Path string, opts ...standard.ImageOption) (err error) {
 	qrReader, err := GenerateQR(qrUrl, opts...)
 	if err != nil {
 		err = utils.Tag_err("mce6", err)
@@ -95,6 +95,26 @@ func UpdateEventQR(packedEventUID string, opts ...standard.ImageOption) (err err
 
 	readSeeker := bytes.NewReader(buf.Bytes())
 
-	err = s3wrap.Public_s3.Store("/events/"+refEventUID+"/qr.png", readSeeker)
+	err = s3wrap.Public_s3.Store(s3Path, readSeeker)
 	return
+}
+
+func EventQRPath(packedEventUID string) string {
+	return "/events/" + packedEventUID + "/qr.png"
+}
+
+// AlbumQRPath: /events/<ev>/albums/<al>/qr.png — frontend albumQrImageUrl ile ayni.
+func AlbumQRPath(packedEventUID string, packedAlbumUID string) string {
+	return "/events/" + packedEventUID + "/albums/" + packedAlbumUID + "/qr.png"
+}
+
+func UpdateEventQR(packedEventUID string, opts ...standard.ImageOption) (err error) {
+	qrUrl := "https://" + env.Env().ServRoot + "/l/q" + packedEventUID
+	return UpdateQR(qrUrl, EventQRPath(packedEventUID), opts...)
+}
+
+// UpdateAlbumQR, album linki (/l/a<packedAlbumUid>) icin QR uretir.
+func UpdateAlbumQR(packedEventUID string, packedAlbumUID string, opts ...standard.ImageOption) (err error) {
+	qrUrl := "https://" + env.Env().ServRoot + "/l/a" + packedAlbumUID
+	return UpdateQR(qrUrl, AlbumQRPath(packedEventUID, packedAlbumUID), opts...)
 }

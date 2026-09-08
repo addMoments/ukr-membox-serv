@@ -85,7 +85,40 @@ func Adjust_event_qr(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := []standard.ImageOption{
+	opts, err := buildQROptions(req)
+	if err != nil {
+		return
+	}
+
+	err = qr.UpdateEventQR(eventPackedUID, opts...)
+	if err != nil {
+		err = utils.Tag_err("mce5", err)
+		return
+	}
+
+	payload = []byte("ok")
+	return
+
+}
+
+// defaultQRReq: album olusturuldugunda / QR'i eksik albumde host hic ayar yapmadan
+// paylasabilsin diye kullanilan varsayilan gorunum (frontend DEFAULT_SETTINGS ile ayni).
+var defaultQRReq = adjust_qr_req{BgColor: "#FFFFFF", FgColor: "#2D2926", Shape: "circle"}
+
+// buildQROptions, renk/sekil/logo istegini go-qrcode secenekelerine cevirir.
+// Etkinlik ve album QR uclari ayni govdeyi kullanir.
+func buildQROptions(req adjust_qr_req) (opts []standard.ImageOption, err error) {
+	if req.FgColor == "" {
+		req.FgColor = defaultQRReq.FgColor
+	}
+	if req.BgColor == "" {
+		req.BgColor = defaultQRReq.BgColor
+	}
+	if req.Shape == "" {
+		req.Shape = defaultQRReq.Shape
+	}
+
+	opts = []standard.ImageOption{
 		standard.WithFgColorRGBHex(req.FgColor),
 		standard.WithBgColorRGBHex(req.BgColor),
 	}
@@ -115,7 +148,7 @@ func Adjust_event_qr(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Scale logo to reasonable size for QR code (max 150x150)
+		// Scale logo to reasonable size for QR code (max 164x164)
 		bounds := img.Bounds()
 		maxSize := 164
 		w, h := bounds.Dx(), bounds.Dy()
@@ -127,19 +160,10 @@ func Adjust_event_qr(w http.ResponseWriter, r *http.Request) {
 			draw.CatmullRom.Scale(scaled, scaled.Bounds(), img, bounds, draw.Over, nil)
 			img = scaled
 		}
-		// svg?
 
 		opts = append(opts, standard.WithLogoImage(img))
 		opts = append(opts, standard.WithLogoSafeZone())
 	}
 
-	err = qr.UpdateEventQR(eventPackedUID, opts...)
-	if err != nil {
-		err = utils.Tag_err("mce5", err)
-		return
-	}
-
-	payload = []byte("ok")
 	return
-
 }
