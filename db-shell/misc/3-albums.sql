@@ -14,7 +14,7 @@
 --   SELECT COUNT(*) FROM uploads WHERE album_uid IS NOT NULL;               -- ile ayni olmali
 --
 -- Tek transaction: bir adim patlarsa hicbir sey uygulanmaz.
--- Deploy sirasi: 3-albums.sql -> membox-serv deploy -> frontend deploy -> 3b-albums-check.sql
+-- Deploy sirasi: 3-albums.sql (sonunda NOTIFY pgrst) -> membox-serv deploy -> frontend deploy -> 3b-albums-check.sql
 
 BEGIN;
 
@@ -296,6 +296,11 @@ SELECT
 -- events = default_albums ve media_uploads = media_with_album olmali.
 
 COMMIT;
+
+-- PostgREST semayi onbellekler; yeni tablo yeniden yukleme sinyali olmadan gorunmez
+-- ("Could not find the table 'public.albums' in the schema cache", PGRST205).
+-- Canlida 2026-09-08'de bu yuzden Albums sayfasi ilk dakikalarda calismadi.
+NOTIFY pgrst, 'reload schema';
 
 -- Geri alma (yalnizca hic kullanilmadiysa; 3b calistiysa once oradaki kisiti dusur):
 --   BEGIN;
