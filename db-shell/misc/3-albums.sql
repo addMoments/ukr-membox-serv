@@ -212,14 +212,20 @@ ALTER TABLE albums ENABLE ROW LEVEL SECURITY;
 -- ALTER DEFAULT PRIVILEGES sadece ayni rolun yaratacagi tablolar icin gecerli. Acikca ver.
 GRANT SELECT, INSERT, UPDATE, DELETE ON albums TO auth;
 
--- webanon: niyet passcode HARIC kolon bazli SELECT. DIKKAT: setup.sql'de "GRANT auth TO webanon"
--- oldugu icin webanon, auth'un tablo duzeyi SELECT'ini de miras alir ve bu kolon kisiti
--- pratikte baglayici DEGIL (yerel testte dogrulandi: webanon passcode kolonunu okuyabiliyor).
--- Gercek koruma RLS'ten geliyor: misafir yalnizca zaten actigi (passcode'unu bildigi)
--- protected albumu gorur; public/private albumlerde passcode yok. Yani sir sizmiyor.
--- Kisit yine de niyeti belgelemek icin duruyor; frontend misafir sorgulari kolon listesiyle gider.
+-- webanon: passcode HARIC kolon bazli SELECT.
+-- DIKKAT (2026-09-09'da duzeltildi): buradaki eski not "webanon setup.sql'deki
+-- GRANT auth TO webanon sayesinde auth'un tablo duzeyi SELECT'ini miras alir, kolon
+-- kisiti baglayici degil" diyordu. CANLIDA BOYLE DEGIL: prod'da webanon o SELECT'i
+-- almiyor, kolon listesi baglayici. Listede olmayan bir kolona dokunan her sorgu
+-- 42501 "permission denied for table albums" veriyor -- deleted_at eksik oldugu icin
+-- uploads_guest_album_select politikasindaki alt sorgu patladi ve misafir sayfasi
+-- tamamen acilmaz oldu (bkz. 5-albums-guest-grant-fix.sql).
+-- Bu yuzden politikalarin okudugu her kolon listede olmali; deleted_at dahil edildi.
+-- passcode disarida: misafir zaten yalnizca actigi protected albumu gorur, public/private
+-- albumlerde passcode yok; ustelik kolon kisiti canlida gercekten baglayici.
 GRANT SELECT (uid, event_uid, name, album_date, location, description, cover, privacy,
-              guest_upload, guest_view, guest_download_all, is_default, sort_order, created_at)
+              guest_upload, guest_view, guest_download_all, is_default, sort_order,
+              created_at, deleted_at)
     ON albums TO webanon;
 
 -- Host: kendi etkinliklerinin albumleri
