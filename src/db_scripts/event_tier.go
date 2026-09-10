@@ -113,10 +113,23 @@ func Event_guest_count(eventUID string) (count int, err error) {
 	return
 }
 
+// Event_media_count, etkinligin paket medya kotasina sayilan dosya adedini doner.
+//
+// Yalnizca galeriye giren gercek medya sayilir:
+//   * upload_type: photo/video. Guestbook kayitlari (text, voice) medya kotasina girmez —
+//     text satirlarini misafir PostgREST uzerinden dogrudan yaziyor, yani hicbir limit
+//     kontrolunden gecmeden "fotograf ve video" kotasini tuketebiliyordu.
+//   * trashed_at IS NULL: cope atilan medya kotayi bosaltir. Depolama sayaci
+//     (Event_storage_bytes) cop dahil sayar, cunku dosya S3'te durmaya devam eder;
+//     adet limiti ise galeride duran icerigi sinirlar.
 func Event_media_count(eventUID string) (count int, err error) {
 	sb := sqlbuilder.NewSelectBuilder()
 	sb.Select("COUNT(*)").From("uploads")
-	sb.Where(sb.Equal("event_uid", eventUID))
+	sb.Where(
+		sb.Equal("event_uid", eventUID),
+		sb.In("upload_type", "photo", "video"),
+		sb.IsNull("trashed_at"),
+	)
 
 	res, err := db.Query_one(sb)
 	if err != nil {
