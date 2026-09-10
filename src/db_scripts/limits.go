@@ -20,8 +20,23 @@ import (
 //	guest_media_count — misafir basina medya adedi    (yeni)
 //	guest_storage_gb  — misafir basina toplam boyut   (yeni)
 //
-// Boyut hesabi uploads.size_bytes uzerinden yapilir; cope atilmis satirlar da sayilir,
-// cunku dosya kalici silinene kadar S3'te durmaya devam eder.
+// Dort sayacin dordu de yalnizca cope ATILMAMIS medyayi sayar (trashed_at IS NULL).
+// Yani host bir fotografi cope atinca kota o an bosalir.
+//
+// Neden boyle: kota, host'un galeride gordugu icerigi olcer. Cope atilan medya galeride
+// gorunmez; gorunmeyen bir dosya yuzunden "limite takildiniz" demek host'a aciklanamiyordu.
+// Ayrica sayaclarin geri kalani (Event_media_count, Event_contributor_count, Has_contributed)
+// zaten copu disliyordu; boyut sayaclari tek istisnaydi ve ayni cope iki farkli cevap
+// veriyorlardi.
+//
+// Bunun bedeli ve nasil kapatildigi:
+//   * Cope atilan dosya S3'te durmaya devam eder, yani kotadan dusen bayt faturadan dusmez.
+//     Host'un copu bosaltmasi icin kalici silme yolu zaten var (DELETE /api/auth/upload/{uid},
+//     satiri ve S3 nesnesini birlikte siler; Trash sayfasindaki "kalici sil" onu cagirir).
+//   * Cope atip yenisini yukleyip sonra copten geri almak kotayi asmanin yolu olurdu.
+//     Geri alma PostgREST uzerinden dogrudan bir PATCH oldugu icin bu kontrol Go'da degil
+//     VERITABANINDA durur: uploads_restore_quota trigger'i (db-shell/misc/8-trash-quota.sql)
+//     kotayi asacak geri almayi reddeder.
 
 var ErrStorageLimitReached = errors.New("storage limit reached")
 var ErrGuestMediaLimitReached = errors.New("guest media limit reached")
@@ -65,7 +80,7 @@ func Event_option_number(eventUID string, key string) (value float64, defined bo
 	return value, true, nil
 }
 
-// Event_storage_bytes, etkinligin tum medyasinin toplam boyutunu doner.
+// Event_storage_bytes, etkinligin copte olmayan medyasinin toplam boyutunu doner.
 //
 // Yalnizca gercek dosyalar (photo/video/voice) sayilir. Metin kayitlari disarida:
 // misafir onlari PostgREST uzerinden dogrudan yaziyor ve size_bytes alanini kendisi
@@ -76,6 +91,7 @@ func Event_storage_bytes(eventUID string) (bytes int64, err error) {
 		FROM uploads
 		WHERE event_uid = ${event_uid}
 		  AND upload_type IN ('photo', 'video', 'voice')
+		  AND trashed_at IS NULL
 	`, map[string]interface{}{"event_uid": eventUID})
 
 	res, err := db.Query_one(bldr)
@@ -87,7 +103,8 @@ func Event_storage_bytes(eventUID string) (bytes int64, err error) {
 	return
 }
 
-// Guest_upload_usage, tek bir misafirin bu etkinlikteki medya adedini ve toplam boyutunu doner.
+// Guest_upload_usage, tek bir misafirin bu etkinlikteki copte olmayan medya adedini ve
+// toplam boyutunu doner.
 func Guest_upload_usage(eventUID string, clientUID string) (count int, bytes int64, err error) {
 	bldr := sqlbuilder.BuildNamed(`
 		SELECT COUNT(*), COALESCE(SUM(size_bytes), 0)
@@ -95,6 +112,7 @@ func Guest_upload_usage(eventUID string, clientUID string) (count int, bytes int
 		WHERE event_uid = ${event_uid}
 		  AND client_uid = ${client_uid}
 		  AND upload_type IN ('photo', 'video', 'voice')
+		  AND trashed_at IS NULL
 	`, map[string]interface{}{"event_uid": eventUID, "client_uid": clientUID})
 
 	res, err := db.Query_one(bldr)
