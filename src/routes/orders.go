@@ -459,6 +459,15 @@ func (o order_routes_typ) GetOrder(w http.ResponseWriter, r *http.Request) {
 	}
 	order["order_account"] = orderAccount
 
+	// Aktivasyon linki (madde 2.2). Panel iki sey icin kullanir: link uretilemiyorsa
+	// "yeniden gonder" butonunu hic gostermez, uretilebiliyorsa linki ve QR'ini ekranda
+	// gosterir -- musteri "Can we see link and QR code here" diye sordu.
+	// order_admin rolunden GIZLENMEZ: bu finansal bir alan degil, destek isi. O rol zaten
+	// alicinin e-postasini goruyor ve maili yeniden gonderebiliyor.
+	activation := activationLinkFor(purchaseUID)
+	order["activation_link"] = activation.URL
+	order["activation_blocked_reason"] = activation.Reason
+
 	if restrictedOrderPanelUser {
 		stripOrderDetailForOrderAdmin(order)
 	}
@@ -781,6 +790,61 @@ func (o order_routes_typ) RetryWaybill(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("waybill created successfully"))
 }
 
+// activationLinkState, bir satin almanin aktivasyon (signup) linkini ya da link neden
+// uretilemedigini tasir.
+type activationLinkState struct {
+	URL    string
+	Email  string
+	Reason string // bos degilse link uretilemez
+	Status int    // Reason doluyken donulecek HTTP kodu
+}
+
+// activationLinkFor, aktivasyon linkini uretmeye calisir.
+//
+// Tek kural, iki kullanici: hem "yeniden gonder" ucu hem de admin siparis detayi bunu cagirir.
+// Ayri ayri yazilirsa panel, sunucunun gondermeyi reddettigi bir siparis icin "yeniden gonder"
+// butonu gostermeye devam eder -- musteri 2.2 yorumunda tam olarak bunu bildirdi:
+// "Resend is available although there is no purchase".
+func activationLinkFor(purchaseUID string) activationLinkState {
+	sb := sqlbuilder.NewSelectBuilder()
+	sb.Select("COALESCE(provider_id, '')", "purchase_info").From("purchases").Where(sb.Equal("uid", purchaseUID))
+	res, err := db.Query_one(sb)
+	if err != nil {
+		return activationLinkState{Reason: "order not found", Status: http.StatusNotFound}
+	}
+
+	// Odeme tamamlanmadiysa ortada gonderilecek bir aktivasyon linki yok.
+	providerID := string(res[0])
+	if providerID == "" {
+		return activationLinkState{Reason: "payment has not been confirmed yet", Status: http.StatusConflict}
+	}
+	if strings.HasPrefix(providerID, "failed:") {
+		return activationLinkState{Reason: "payment failed, there is no activation link for this order", Status: http.StatusConflict}
+	}
+
+	purchaseInfo := types.Js_object{}
+	if err := json.Unmarshal(res[1], &purchaseInfo); err != nil {
+		return activationLinkState{Reason: "could not read the order", Status: http.StatusInternalServerError}
+	}
+
+	email, _ := purchaseInfo["email"].(string)
+	if email == "" {
+		return activationLinkState{Reason: "order has no buyer email", Status: http.StatusConflict}
+	}
+
+	packedUID, err := utils.UUID.PackUUID(purchaseUID)
+	if err != nil {
+		return activationLinkState{Reason: "invalid order id", Status: http.StatusBadRequest}
+	}
+
+	signupURL, err := activationSignupURL(packedUID, email)
+	if err != nil {
+		return activationLinkState{Reason: "could not build the activation link", Status: http.StatusInternalServerError}
+	}
+
+	return activationLinkState{URL: signupURL, Email: email}
+}
+
 // POST /api/admin/orders/{purchaseUID}/resend-activation
 // Ne: Bir siparisin aktivasyon (signup) mailini yeniden gonderir.
 // Nasil: Odeme callback'inin kullandigi ayni linki ve ayni metni uretip yollar.
@@ -790,59 +854,23 @@ func (o order_routes_typ) RetryWaybill(w http.ResponseWriter, r *http.Request) {
 func (o order_routes_typ) ResendActivation(w http.ResponseWriter, r *http.Request) {
 	purchaseUID := mux.Vars(r)["purchaseUID"]
 
-	sb := sqlbuilder.NewSelectBuilder()
-	sb.Select("COALESCE(provider_id, '')", "purchase_info").From("purchases").Where(sb.Equal("uid", purchaseUID))
-	res, err := db.Query_one(sb)
-	if err != nil {
-		http.Error(w, "order not found", http.StatusNotFound)
+	state := activationLinkFor(purchaseUID)
+	if state.Reason != "" {
+		http.Error(w, state.Reason, state.Status)
 		return
 	}
 
-	// Odeme tamamlanmadiysa ortada gonderilecek bir aktivasyon linki yok.
-	providerID := string(res[0])
-	if providerID == "" {
-		http.Error(w, "payment has not been confirmed yet", http.StatusConflict)
-		return
-	}
-	if strings.HasPrefix(providerID, "failed:") {
-		http.Error(w, "payment failed, there is no activation link for this order", http.StatusConflict)
-		return
-	}
+	fmt.Printf("[order.resend] purchase=%s to=%s\n", purchaseUID, state.Email)
 
-	purchaseInfo := types.Js_object{}
-	if err := json.Unmarshal(res[1], &purchaseInfo); err != nil {
-		http.Error(w, "could not read the order", http.StatusInternalServerError)
-		return
-	}
-
-	email, _ := purchaseInfo["email"].(string)
-	if email == "" {
-		http.Error(w, "order has no buyer email", http.StatusConflict)
-		return
-	}
-
-	packedUID, err := utils.UUID.PackUUID(purchaseUID)
-	if err != nil {
-		http.Error(w, "invalid order id", http.StatusBadRequest)
-		return
-	}
-
-	signupURL, err := activationSignupURL(packedUID, email)
-	if err != nil {
-		http.Error(w, "could not build the activation link", http.StatusInternalServerError)
-		return
-	}
-
-	fmt.Printf("[order.resend] purchase=%s to=%s\n", purchaseUID, email)
-
-	if mailErr := sendActivationMail(email, signupURL); mailErr != nil {
-		fmt.Printf("[order.resend] ERROR: purchase=%s to=%s err=%v\n", purchaseUID, email, mailErr)
+	if mailErr := sendActivationMail(state.Email, state.URL); mailErr != nil {
+		fmt.Printf("[order.resend] ERROR: purchase=%s to=%s err=%v\n", purchaseUID, state.Email, mailErr)
 		http.Error(w, "the email could not be sent", http.StatusBadGateway)
 		return
 	}
 
-	networkutils.SendJson(types.Js_object{"ok": true, "email": email}, w)
+	networkutils.SendJson(types.Js_object{"ok": true, "email": state.Email}, w)
 }
+
 
 // GET /api/admin/check
 func (o order_routes_typ) AdminCheck(w http.ResponseWriter, r *http.Request) {
