@@ -101,8 +101,6 @@ func (ur upload_routes_typ) Upload(w http.ResponseWriter, r *http.Request) {
 	switch purpose {
 	case "qr_logo":
 		fallthrough
-	case "album_cover":
-		fallthrough
 	case "event_image":
 		if len(fNames) != 1 {
 			err = errors.New("only one file is allowed")
@@ -216,44 +214,6 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 		totalBytes += fileSizes[name]
 	}
 
-	// Ne: Yuklemenin gidecegi album. ?album=<packedAlbumUid> verilmezse General.
-	// Nasil: Album bu etkinlige ait, silinmemis, yuklemeye acik ve (private/protected ise)
-	//        token'da acik olmali; aksi halde 403 + kod. Guestbook (voice) albumsuz kalir.
-	// Neden: RLS yalnizca okumayi suzer; INSERT membox-serv'den yapildigi icin kural burada.
-	albumUID := ""
-	if utype != "voice" {
-		albumPacked := r.URL.Query().Get("album")
-		if albumPacked == "" {
-			albumUID, err = dbscripts.Default_album(eventUID)
-			if err != nil {
-				err = utils.Tag_err("gu2.05", err)
-				return
-			}
-		} else {
-			albumUID, err = utils.UUID.UnpackUUID(albumPacked)
-			if err != nil {
-				err = utils.Tag_err("gu2.06", err)
-				stat_code = http.StatusBadRequest
-				return
-			}
-		}
-		// General dahil her hedef ayni kuraldan gecer: host General'i misafire kapattiysa
-		// (guest_upload=false) parametresiz yukleme de reddedilir (karar 12).
-		var album dbscripts.Album
-		album, err = dbscripts.Get_album(albumUID)
-		if err == nil {
-			err = dbscripts.Guest_album_access(album, eventUID, claims.Al)
-		}
-		if err != nil {
-			if sendAlbumGuestError(w, err) {
-				err = nil
-				return
-			}
-			err = utils.Tag_err("gu2.07", err)
-			return
-		}
-	}
-
 	// Etkinlik ve misafir bazli dort limit (medya adedi, depolama, misafir adedi, misafir boyutu).
 	err = dbscripts.Check_upload_limits(eventUID, claims.UserUID, len(reqData), totalBytes)
 	if err != nil {
@@ -314,22 +274,16 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 		"client_uid",
 		"event_uid",
 		"value",
-		"album_uid",
 		"size_bytes",
 	)
 
 	for i := 0; i < len(reqData); i++ {
-		var albumVal interface{}
-		if albumUID != "" {
-			albumVal = albumUID
-		}
 		ib.Values(
 			uuidMap[reqData[i]],
 			utype,
 			claims.UserUID,
 			eventUID,
 			pathF(reqData[i]),
-			albumVal,
 			fileSizes[reqData[i]],
 		)
 	}
@@ -397,7 +351,7 @@ func (ur upload_routes_typ) Delete(w http.ResponseWriter, r *http.Request) {
 
 	if len(uploadRes) == 0 {
 		payload = map[string]interface{}{
-			"success":         true,
+			"success": true,
 			"already_deleted": true,
 		}
 		stat_code = http.StatusOK

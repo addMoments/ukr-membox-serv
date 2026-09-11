@@ -136,9 +136,6 @@ func main() {
 	apiRoutes.HandleFunc("/upload/{purpose}", auth.AuthMiddleware(routes.UploadRoutes.Upload, "auth"))
 	apiRoutes.HandleFunc("/auth/upload/{uploadPackedUid}", auth.AuthMiddleware(routes.UploadRoutes.Delete, "auth")).Methods("DELETE")
 	apiRoutes.HandleFunc("/qr/{eventPackedUid}", auth.AuthMiddleware(routes.Adjust_event_qr, "auth"))
-	apiRoutes.HandleFunc("/qr/{eventPackedUid}/album/{albumPackedUid}", auth.AuthMiddleware(routes.AlbumRoutes.AdjustQR, "auth")).Methods("POST")
-	apiRoutes.HandleFunc("/event/{eventPackedUid}/albums/ensure-qr", auth.AuthMiddleware(routes.AlbumRoutes.EnsureQRs, "auth")).Methods("POST")
-	apiRoutes.HandleFunc("/event/{eventPackedUid}/album/{albumPackedUid}", auth.AuthMiddleware(routes.AlbumRoutes.Delete, "auth")).Methods("DELETE")
 	apiRoutes.HandleFunc("/calc-size/{eventPackedUid}", auth.AuthMiddleware(routes.Calc_size_route, "auth"))
 	apiRoutes.HandleFunc("/products", routes.ProductRoutes.GetProducts).Methods("GET")
 	apiRoutes.HandleFunc("/promo/validate", routes.PromoRoutes.Validate).Methods("POST")
@@ -202,8 +199,6 @@ func main() {
 	guestRoutes := apiRoutes.PathPrefix("/guest").Subrouter()
 	guestRoutes.HandleFunc("/upload/{eventPackedUid}/{utype}", auth.AuthMiddleware(routes.UploadRoutes.GuestUpload, "webanon"))
 	guestRoutes.HandleFunc("/whoami", auth.AuthMiddleware(routes.AuthRoutes.WhoAmI, "webanon"))
-	guestRoutes.HandleFunc("/album/{albumPackedUid}/open", auth.AuthMiddleware(routes.AlbumRoutes.GuestOpen, "webanon")).Methods("POST")
-	guestRoutes.HandleFunc("/album/{albumPackedUid}/zip", auth.AuthMiddleware(routes.AlbumRoutes.GuestZip, "webanon")).Methods("GET")
 
 	// Signup email endpoints (public - token is the auth)
 	authRoutes.HandleFunc("/signup/email/{token}", routes.SignupEmailRoutes.Get).Methods("GET")

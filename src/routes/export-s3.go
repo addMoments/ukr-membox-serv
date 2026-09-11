@@ -52,24 +52,6 @@ func Export_s3(input types.Js_object, user_uid string) (output types.Js_object, 
 		return
 	}
 
-	// Opsiyonel album_uid: yalnizca o albumun medyasi (host "Download album").
-	// Albumun bu etkinlige ait oldugu dogrulanir; degilse job hata ile biter.
-	albumUID, _ := input["album_uid"].(string)
-	if albumUID != "" {
-		album, albErr := dbscripts.Get_album(albumUID)
-		if albErr != nil {
-			err = albErr
-			log.Printf("[export-s3] album lookup failed: %v", albErr)
-			return
-		}
-		if album.EventUID != event_uid {
-			err = errors.New("album does not belong to this event")
-			log.Printf("[export-s3] %v", err)
-			return
-		}
-		log.Printf("[export-s3] limited to album %s (%s)", albumUID, album.Name)
-	}
-
 	sb := sqlbuilder.NewSelectBuilder()
 	sb.Select(
 		"uploads.uid",
@@ -85,9 +67,6 @@ func Export_s3(input types.Js_object, user_uid string) (output types.Js_object, 
 		sb.Equal("uploads.event_uid", event_uid),
 		sb.IsNull("uploads.trashed_at"),
 	)
-	if albumUID != "" {
-		sb.Where(sb.Equal("uploads.album_uid", albumUID))
-	}
 
 	uploads, err := db.Query_all(sb)
 	if err != nil {
