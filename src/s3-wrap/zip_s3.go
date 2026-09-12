@@ -36,16 +36,3 @@ func (sr s3_zip_streamer) Add_file(zip_path string, reader io.Reader) (n int64, 
 
 	return io.Copy(entry, reader)
 }
-
-func (sr s3_zip_streamer) Open_writer(zip_path string) (w *io.PipeWriter, err error) {
-	reader, writer := io.Pipe()
-
-	go (func() {
-		_, err := sr.Add_file(zip_path, reader)
-		if err != nil {
-			reader.CloseWithError(err)
-		}
-	})()
-
-	return writer, nil
-}

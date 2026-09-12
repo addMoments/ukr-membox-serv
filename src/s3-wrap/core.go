@@ -146,16 +146,27 @@ func (sr S3_serv) StoreStream(path string) io.WriteCloser {
 	return &S3StreamWriter{pw: pw, done: done}
 }
 
-func (sr S3_serv) Get_presign(path string, expr time.Duration) (download_url string, err error) {
+// Get_presign, GET icin kisa omurlu imzali URL uretir. filename bos degilse S3 cevaba
+// "Content-Disposition: attachment; filename=..." ekler: tarayici dosyayi acmak yerine o adla
+// indirir (capraz kaynakta <a download> yok sayildigi icin adi ve davranisi bu baslik belirler).
+func (sr S3_serv) Get_presign(path string, expr time.Duration, filename string) (download_url string, err error) {
 	if !sr.Is_init {
 		err = fmt.Errorf("s3 is not init")
 		return
 	}
 
-	req, _ := sr.Serv.GetObjectRequest(&s3.GetObjectInput{
+	input := &s3.GetObjectInput{
 		Bucket: aws.String(sr.Inf.Bucket),
 		Key:    aws.String(path),
-	})
+	}
+	if filename != "" {
+		// FormatMediaType ASCII disi adlari RFC 5987 (filename*=utf-8''...) ile kodlar.
+		input.ResponseContentDisposition = aws.String(
+			mime.FormatMediaType("attachment", map[string]string{"filename": filename}),
+		)
+	}
+
+	req, _ := sr.Serv.GetObjectRequest(input)
 
 	download_url, err = req.Presign(expr)
 	return

@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -102,7 +103,16 @@ func Export_s3(input types.Js_object, user_uid string) (output types.Js_object, 
 	exportPath := fmt.Sprintf("/events/%s/export-%s.zip", packedEventUID, packedRandUUID)
 	log.Printf("[export-s3] creating zip at %s", exportPath)
 	zipStreamer := s3wrap.Public_s3.New_zip_streamer(exportPath)
-	defer zipStreamer.Close()
+	// Ne: Close basari yolunda acikca cagrilip hatasi kontrol ediliyor; defer yalnizca erken
+	//     donuslerde S3 akisini ve goroutine'ini serbest birakmak icin.
+	// Neden: Merkezi dizini yazan ve multipart upload'i tamamlayan adim Close. Eskiden defer'e
+	//        birakildigi icin upload patlasa bile is "succeeded" oluyor, host bozuk zip indiriyordu.
+	zipClosed := false
+	defer func() {
+		if !zipClosed {
+			_ = zipStreamer.Close()
+		}
+	}()
 
 	simpleUidMap := make(map[string]map[string]string)
 	simpleUidSeq := make(map[string]int)
@@ -146,13 +156,19 @@ func Export_s3(input types.Js_object, user_uid string) (output types.Js_object, 
 				log.Printf("[export-s3] failed to get file from S3 %s: %v", value, err)
 				return
 			}
-			defer file.Close()
 
 			written := int64(0)
 
 			fileName := path.Base(value)
-			zipPath := fmt.Sprintf("/uploads/%s-%s", simplifyUid(uploadUID, "uploads"), fileName)
+			// Ne: Zip icindeki yollar bastaki "/" olmadan yaziliyor (uploads/..., uploads.xlsx, banner.*).
+			// Neden: "/uploads/..." gibi mutlak yollu girdileri Windows'un yerlesik ayiklayicisi
+			//        gostermiyor -- host 75 MB'lik zip'i acinca "ici bos" goruyordu (macOS ve unzip
+			//        egik cizgiyi sessizce atiyordu, o yuzden fark edilmedi).
+			zipPath := fmt.Sprintf("uploads/%s-%s", simplifyUid(uploadUID, "uploads"), fileName)
 			written, err = zipStreamer.Add_file(zipPath, file)
+			// Her dosya eklenir eklenmez kapatiliyor; eski defer binlerce S3 govdesini fonksiyon
+			// sonuna kadar acik tutuyordu.
+			file.Close()
 			if err != nil {
 				log.Printf("[export-s3] failed to add file to zip %s: %v", zipPath, err)
 				return
@@ -171,17 +187,18 @@ func Export_s3(input types.Js_object, user_uid string) (output types.Js_object, 
 	}
 
 	log.Printf("[export-s3] writing uploads.xlsx to zip")
-	w, err := zipStreamer.Open_writer("/uploads.xlsx")
-	if err != nil {
-		log.Printf("[export-s3] failed to open writer for uploads.xlsx: %v", err)
+	// Ne: xlsx once bellege yazilip tek girdi olarak ekleniyor.
+	// Neden: Onceki Open_writer yolu pipe'in diger ucunu ayri bir goroutine'de zip'e kopyaliyor ve
+	//        girdinin kapanisini defer'e birakiyordu; banner eklenirken zip.Writer iki goroutine'den
+	//        yaziliyordu (archive/zip es zamanli kullanima kapali). Satir basina ~100 bayt, bellek
+	//        sorun degil.
+	var xlsxBuf bytes.Buffer
+	if _, err = uploadsExcel.WriteTo(&xlsxBuf); err != nil {
+		log.Printf("[export-s3] failed to write Excel file: %v", err)
 		return
 	}
-	defer w.Close()
-
-	_, err = uploadsExcel.WriteTo(w)
-	if err != nil {
-		log.Printf("[export-s3] failed to write Excel file: %v", err)
-		w.CloseWithError(err)
+	if _, err = zipStreamer.Add_file("uploads.xlsx", &xlsxBuf); err != nil {
+		log.Printf("[export-s3] failed to add uploads.xlsx to zip: %v", err)
 		return
 	}
 
@@ -209,9 +226,18 @@ func Export_s3(input types.Js_object, user_uid string) (output types.Js_object, 
 				log.Printf("[export-s3] failed to get event image: %v", bannerErr)
 			}
 		} else {
-			defer reader.Close()
-			zipStreamer.Add_file(fmt.Sprintf("/banner%s", path.Ext(bannerPath)), reader)
+			_, bannerErr = zipStreamer.Add_file(fmt.Sprintf("banner%s", path.Ext(bannerPath)), reader)
+			reader.Close()
+			if bannerErr != nil {
+				log.Printf("[export-s3] failed to add banner to zip: %v", bannerErr)
+			}
 		}
+	}
+
+	zipClosed = true
+	if err = zipStreamer.Close(); err != nil {
+		log.Printf("[export-s3] failed to finish zip upload %s: %v", exportPath, err)
+		return
 	}
 
 	log.Printf("[export-s3] export completed successfully: %s", s3wrap.Public_s3.Url(exportPath))
