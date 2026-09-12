@@ -90,8 +90,13 @@ func (ur upload_routes_typ) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fNames := []string{}
-	err = json.NewDecoder(r.Body).Decode(&fNames)
+	// Ne: Govde ya eski bicim ["a.jpg"] ya da yeni bicim [{"name":"a.jpg","size":123}].
+	// Neden: Frontend'in ortak uploadFiles yardimcisi 2.17'den beri (046cb5c) her yuklemede
+	//        boyutu da gonderiyor; burasi yalnizca duz isim dizisini cozdugu icin 8 Eylul'den
+	//        itibaren etkinlik gorseli ve QR logosu yuklemeleri "gu2 | json: cannot unmarshal
+	//        object into Go value of type string" ile 500 donuyordu. Boyut burada kullanilmiyor
+	//        (host yuklemeleri kotaya girmiyor), yalnizca kabul ediliyor.
+	fNames, _, err := decodeUploadRequest(r)
 	if err != nil {
 		err = utils.Tag_err("gu2", err)
 		return
