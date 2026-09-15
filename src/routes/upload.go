@@ -242,12 +242,16 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 				return
 			}
 		}
-		// General dahil her hedef ayni kuraldan gecer: host General'i misafire kapattiysa
-		// (guest_upload=false) parametresiz yukleme de reddedilir (karar 12).
+		// General dahil her hedef ayni kuraldan gecer: host General'de yuklemeyi kapattiysa
+		// (guest_upload=false) parametresiz yukleme de UPLOADS_CLOSED ile reddedilir.
 		var album dbscripts.Album
 		album, err = dbscripts.Get_album(albumUID)
 		if err == nil {
-			err = dbscripts.Guest_album_access(album, eventUID, claims.Al)
+			var galleryOn bool
+			galleryOn, err = dbscripts.Event_guest_gallery(eventUID)
+			if err == nil {
+				err = dbscripts.Guest_album_upload_access(album, eventUID, galleryOn, claims.Al)
+			}
 		}
 		if err != nil {
 			if sendAlbumGuestError(w, err) {

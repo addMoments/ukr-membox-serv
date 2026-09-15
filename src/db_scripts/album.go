@@ -24,8 +24,14 @@ type Album struct {
 
 var ErrAlbumNotFound = errors.New("album not found")
 
-// ErrAlbumClosed: album silinmis ya da misafir yuklemesi kapali -> misafire hic gorunmez (karar 12).
+// ErrAlbumClosed: album silinmis, baska etkinligin ya da misafire acik hicbir yani yok
+// (yukleme kapali VE galeri gorunmuyor) -> misafire hic gorunmez.
 var ErrAlbumClosed = errors.New("album is closed")
+
+// ErrUploadsClosed: album misafire gorunur ama host yuklemeyi kapatmis (guest_upload=false).
+// 2026-09-15: eskiden yuklemesi kapali album tamamen gizleniyordu (karar 12); musteri
+// "gizleme duzgun calismiyor" dedigi icin yukleme anahtari artik yalnizca yuklemeyi kapatir.
+var ErrUploadsClosed = errors.New("uploads are closed for this album")
 
 // ErrPasscodeRequired / ErrPasscodeInvalid: protected album, token'da acik degil.
 var ErrPasscodeRequired = errors.New("passcode required")
@@ -127,14 +133,19 @@ func Event_guest_gallery(eventUID string) (enabled bool, err error) {
 }
 
 // Guest_album_access, misafirin albumu gorup goremeyecegini tek yerde karara baglar.
-// RLS'teki albums_guest_select ile birebir ayni kural:
+// RLS'teki albums_guest_select ile birebir ayni kural (11-albums-v2.sql):
 //
-//	silinmemis + yukleme acik + (public | token'da acik)
+//	silinmemis + ayni etkinlik
+//	+ misafire acik bir yani var: yukleme acik YA DA (album gorunur VE etkinlik galerisi acik)
+//	+ public/protected ya da token'da acik
 //
 // Protected album token'da yoksa ErrPasscodeRequired, private ise ErrAlbumNotOpened doner;
-// ikisi de "open" ucundan gecilerek asilir.
-func Guest_album_access(album Album, eventUID string, openedAlbums []string) error {
-	if album.Deleted || album.EventUID != eventUID || !album.GuestUpload {
+// ikisi de "open" ucundan gecilerek asilir. Yukleme ayri: bkz. Guest_album_upload_access.
+func Guest_album_access(album Album, eventUID string, galleryOn bool, openedAlbums []string) error {
+	if album.Deleted || album.EventUID != eventUID {
+		return ErrAlbumClosed
+	}
+	if !album.GuestUpload && !(album.GuestView && galleryOn) {
 		return ErrAlbumClosed
 	}
 	if album.Privacy == "public" {
@@ -149,6 +160,17 @@ func Guest_album_access(album Album, eventUID string, openedAlbums []string) err
 		return ErrPasscodeRequired
 	}
 	return ErrAlbumNotOpened
+}
+
+// Guest_album_upload_access: albume yukleme icin gorunurluk kurali + guest_upload acik olmali.
+func Guest_album_upload_access(album Album, eventUID string, galleryOn bool, openedAlbums []string) error {
+	if err := Guest_album_access(album, eventUID, galleryOn, openedAlbums); err != nil {
+		return err
+	}
+	if !album.GuestUpload {
+		return ErrUploadsClosed
+	}
+	return nil
 }
 
 // Trash_album_uploads, albumdeki cope atilmamis tum medyayi cope tasir ve sayisini doner.

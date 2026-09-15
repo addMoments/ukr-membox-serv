@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -40,6 +41,8 @@ func sendAlbumGuestError(w http.ResponseWriter, err error) bool {
 		_ = networkutils.SendErrorJSON(w, http.StatusForbidden, "PASSCODE_INVALID", "The passcode is incorrect.")
 	case errors.Is(err, dbscripts.ErrAlbumNotOpened):
 		_ = networkutils.SendErrorJSON(w, http.StatusForbidden, "ALBUM_NOT_OPENED", "Open this album from its link first.")
+	case errors.Is(err, dbscripts.ErrUploadsClosed):
+		_ = networkutils.SendErrorJSON(w, http.StatusForbidden, "UPLOADS_CLOSED", "Uploads are closed for this album.")
 	case errors.Is(err, dbscripts.ErrEventClosed):
 		_ = networkutils.SendErrorJSON(w, http.StatusGone, "EVENT_CLOSED", "This event is closed.")
 	default:
@@ -363,7 +366,12 @@ func (ar album_routes_typ) GuestOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accessErr := dbscripts.Guest_album_access(album, eventUID, claims.Al)
+	galleryOn, err := dbscripts.Event_guest_gallery(eventUID)
+	if err != nil {
+		return
+	}
+
+	accessErr := dbscripts.Guest_album_access(album, eventUID, galleryOn, claims.Al)
 	switch {
 	case accessErr == nil:
 		// Zaten acik (public ya da token'da). Token'a dokunmaya gerek yok.
@@ -402,9 +410,11 @@ func (ar album_routes_typ) GuestOpen(w http.ResponseWriter, r *http.Request) {
 	}
 
 	payload = map[string]interface{}{
-		"ok":         true,
-		"album_uid":  album.UID,
-		"guest_view": album.GuestView,
+		"ok":           true,
+		"album_uid":    album.UID,
+		"guest_view":   album.GuestView,
+		"guest_upload": album.GuestUpload,
+		"gallery_on":   galleryOn,
 	}
 }
 
@@ -454,12 +464,11 @@ func (ar album_routes_typ) GuestZip(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	if err = dbscripts.Guest_album_access(album, eventUID, claims.Al); err != nil {
-		return
-	}
-
 	galleryOn, err := dbscripts.Event_guest_gallery(eventUID)
 	if err != nil {
+		return
+	}
+	if err = dbscripts.Guest_album_access(album, eventUID, galleryOn, claims.Al); err != nil {
 		return
 	}
 	if !galleryOn || !album.GuestView || !album.GuestDownloadAll {
@@ -510,9 +519,13 @@ func (ar album_routes_typ) GuestZip(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Store: sikistirma yok; medya zaten sikisik, CPU harcamaya deger degil.
+		// Modified sart: verilmezse DOS tarihi 0 (1980-00-00) yazilir ve Windows'un yerlesik
+		// zip klasoru gecersiz tarihli girdileri hic listelemez -> "bos zip" (export'ta
+		// 2026-09-13'te yasandi, DEVIR-NOTLARI §18). macOS/unzip bunu gostermez.
 		entry, createErr := zw.CreateHeader(&zip.FileHeader{
-			Name:   fmt.Sprintf("%03d-%s", i+1, path.Base(value)),
-			Method: zip.Store,
+			Name:     fmt.Sprintf("%03d-%s", i+1, path.Base(value)),
+			Method:   zip.Store,
+			Modified: time.Now(),
 		})
 		if createErr != nil {
 			file.Close()
