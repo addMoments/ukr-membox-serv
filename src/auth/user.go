@@ -207,7 +207,6 @@ func AuthMiddleware(next http.HandlerFunc, role string) http.HandlerFunc {
 					return
 				}
 
-
 				is_live := false
 				is_live, err = dbscripts.Is_event_live(eventUID)
 				if err != nil {
@@ -253,6 +252,20 @@ func AuthMiddleware(next http.HandlerFunc, role string) http.HandlerFunc {
 			if !is_live {
 				err = errors.New("event is not live")
 				return
+			}
+
+			// Ne: Albumlerden onceki misafir token'larinda "ev" claim'i yok; PostgREST
+			//     RLS'i bu claim'e bakarak album gosterdigi icin token yenilenir.
+			// Nasil: Ayni participant UID ile yeni token basilir, X-Auth-Token ile doner;
+			//        frontend mevcut mekanizmayla saklar. Sadece bir kez olur.
+			// Neden: Aksi halde eski token'li misafir hata almadan bos album listesi gorur
+			//        ve core.ts'deki 401 yolu (token gecerli oldugu icin) devreye girmez.
+			if claims.Ev == "" {
+				claims, _, err = ReissueGuestToken(w, claims, eventUID, nil)
+				if err != nil {
+					err = utils.Tag_err("gu4.1", err)
+					return
+				}
 			}
 			return
 		}
@@ -310,6 +323,7 @@ func AuthMiddleware(next http.HandlerFunc, role string) http.HandlerFunc {
 				}
 
 				claims.UserUID = participantUID
+				claims.Ev = eventUID
 
 				return
 			}
@@ -347,6 +361,17 @@ func Authorize(w http.ResponseWriter, r *http.Request, role string, userUID stri
 		IP:      ip,
 		Exp:     now.Add(tokenLife).Unix(),
 		Iat:     now.Unix(),
+	}
+
+	// Misafir token'i etkinligini tasir; RLS album gorunurlugunu buradan okur.
+	if role == "webanon" && eventPackedUID != "" {
+		var evUID string
+		evUID, err = utils.UUID.UnpackUUID(eventPackedUID)
+		if err != nil {
+			err = utils.Tag_err("au0", err)
+			return
+		}
+		claims.Ev = evUID
 	}
 
 	fmt.Println("authorize", role, claims)
@@ -398,5 +423,49 @@ func Authorize(w http.ResponseWriter, r *http.Request, role string, userUID stri
 	}
 
 	r = r.WithContext(context.WithValue(r.Context(), "claims", claims))
+	return
+}
+
+// ReissueGuestToken, mevcut misafir icin ayni participant UID ile yeni bir token basar.
+// Nasil: ev claim'i eventUID olur, al listesine extraAlbums eklenir (tekrarsiz),
+//
+//	X-Auth-Token basligiyla doner ve claims guncellenmis haliyle geri verilir.
+//
+// Neden: Iki yerde gerekiyor: (1) eski token'a "ev" eklemek, (2) private/protected
+//
+//	album acildiginda "al" listesini buyutmek. Participant satiri yaratilmaz.
+func ReissueGuestToken(w http.ResponseWriter, current TokenClaims, eventUID string, extraAlbums []string) (claims TokenClaims, token string, err error) {
+	if current.Role != "webanon" {
+		err = errors.New("only guest tokens can be reissued")
+		return
+	}
+
+	albums := make([]string, 0, len(current.Al)+len(extraAlbums))
+	seen := map[string]bool{}
+	for _, a := range append(append([]string{}, current.Al...), extraAlbums...) {
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		albums = append(albums, a)
+	}
+
+	now := time.Now()
+	claims = TokenClaims{
+		Role:    "webanon",
+		UserUID: current.UserUID,
+		IP:      "-",
+		Exp:     now.Add(tokenLife).Unix(),
+		Iat:     now.Unix(),
+		Ev:      eventUID,
+		Al:      albums,
+	}
+
+	token, err = claims.GenerateToken(env.Env().Jwt_secret)
+	if err != nil {
+		return
+	}
+
+	SetToken(w, token)
 	return
 }
