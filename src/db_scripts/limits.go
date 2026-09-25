@@ -21,7 +21,9 @@ import (
 //	guest_storage_gb  — misafir basina toplam boyut   (yeni)
 //
 // Dort sayacin dordu de yalnizca cope ATILMAMIS medyayi sayar (trashed_at IS NULL).
-// Yani host bir fotografi cope atinca kota o an bosalir.
+// Yani host bir fotografi cope atinca kota o an bosalir. Dosyasi S3'e ulasmamis yukleme de
+// bir saatten sonra sayilmaz (UploadCountsSQL, upload_receipt.go): yarim kalan denemeler
+// misafirin hakkini yemesin.
 //
 // Neden boyle: kota, host'un galeride gordugu icerigi olcer. Cope atilan medya galeride
 // gorunmez; gorunmeyen bir dosya yuzunden "limite takildiniz" demek host'a aciklanamiyordu.
@@ -92,6 +94,7 @@ func Event_storage_bytes(eventUID string) (bytes int64, err error) {
 		WHERE event_uid = ${event_uid}
 		  AND upload_type IN ('photo', 'video', 'voice')
 		  AND trashed_at IS NULL
+		  AND `+UploadCountsSQL+`
 	`, map[string]interface{}{"event_uid": eventUID})
 
 	res, err := db.Query_one(bldr)
@@ -113,6 +116,7 @@ func Guest_upload_usage(eventUID string, clientUID string) (count int, bytes int
 		  AND client_uid = ${client_uid}
 		  AND upload_type IN ('photo', 'video', 'voice')
 		  AND trashed_at IS NULL
+		  AND `+UploadCountsSQL+`
 	`, map[string]interface{}{"event_uid": eventUID, "client_uid": clientUID})
 
 	res, err := db.Query_one(bldr)

@@ -481,6 +481,7 @@ func (ar album_routes_typ) GuestZip(w http.ResponseWriter, r *http.Request) {
 		sb.Equal("album_uid", albumUID),
 		sb.IsNull("trashed_at"),
 		sb.In("upload_type", "photo", "video"),
+		sb.IsNotNull("received_at"),
 	).OrderBy("created_at ASC")
 	rows, err := db.Query_all(sb)
 	if err != nil {

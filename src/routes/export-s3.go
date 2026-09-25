@@ -85,6 +85,8 @@ func Export_s3(input types.Js_object, user_uid string) (output types.Js_object, 
 	).Where(
 		sb.Equal("uploads.event_uid", event_uid),
 		sb.IsNull("uploads.trashed_at"),
+		// Dosyasi S3'e ulasmamis yukleme galeride de yok; export'a da girmez.
+		sb.IsNotNull("uploads.received_at"),
 	)
 	if albumUID != "" {
 		sb.Where(sb.Equal("uploads.album_uid", albumUID))

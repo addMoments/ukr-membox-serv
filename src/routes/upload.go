@@ -10,6 +10,7 @@ import (
 	dbscripts "membox-serv/src/db_scripts"
 	networkutils "membox-serv/src/network_utils"
 	s3wrap "membox-serv/src/s3-wrap"
+	uploadreceipt "membox-serv/src/upload_receipt"
 	"membox-serv/src/utils"
 	"net/http"
 	"path"
@@ -309,12 +310,13 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	err = networkutils.SendJson(payload, w)
-	if err != nil {
-		err = utils.Tag_err("gu3.1", err)
-		return
-	}
-
+	// Ne: Satirlar received_at NULL yazilir ve cevaptan ONCE eklenir.
+	// Neden: Dosya tarayicidan dogrudan S3'e gidiyor; PUT yarida kalirsa (25 Eylul, otobusteki
+	//        mobil ag) satir kaliyor ve galeri olmayan dosyayi gri kutu olarak gosteriyordu.
+	//        NULL satiri PostgREST rolleri gormez; dosya S3'e ulasinca /confirm ya da
+	//        upload_receipt taramasi doldurur. Eskiden satir cevaptan sonra ekleniyordu: ekleme
+	//        patlarsa misafir satirsiz bir dosya yukluyordu, simdi ise /confirm'un bulacagi satir
+	//        misafir PUT'a baslamadan var.
 	ib := sqlbuilder.NewInsertBuilder()
 	ib.InsertInto("uploads")
 	ib.Cols(
@@ -325,6 +327,7 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 		"value",
 		"album_uid",
 		"size_bytes",
+		"received_at",
 	)
 
 	for i := 0; i < len(reqData); i++ {
@@ -340,11 +343,110 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 			pathF(reqData[i]),
 			albumVal,
 			fileSizes[reqData[i]],
+			nil,
 		)
 	}
 
 	err = db.Exec(ib)
+	if err != nil {
+		err = utils.Tag_err("gu4", err)
+		return
+	}
 
+	err = networkutils.SendJson(payload, w)
+	if err != nil {
+		err = utils.Tag_err("gu3.1", err)
+		return
+	}
+
+}
+
+// uploadConfirmRequest, /confirm govdesinin tek ogesi: presign'in dondurdugu filePath ve
+// tarayicinin PUT'u basarili gorup gormedigi.
+type uploadConfirmRequest struct {
+	Path string `json:"path"`
+	OK   bool   `json:"ok"`
+}
+
+// En fazla bu kadar yol tek istekte; her biri bir S3 HEAD demek.
+const maxConfirmPaths = 50
+
+// GuestUploadConfirm, misafirin PUT'u bittikten sonra dosyanin S3'e gercekten ulasip
+// ulasmadigini sorar ve satiri buna gore sonuclandirir (uploadreceipt.Resolve).
+//
+// POST /api/guest/upload/{eventPackedUid}/confirm
+// Govde: [{"path": "/events/...", "ok": true}]
+// Cevap: {"/events/...": "received" | "pending" | "missing" | "empty"}
+//
+// ok=false (PUT hata verdi) ve dosya yoksa satir silinir, misafirin kotasi hemen bosalir.
+// ok=true ama dosya yoksa satir silinmez: tarayici basari gordugu halde HEAD bulamadiysa karar
+// taramaya birakilir. PUT hata verse de dosya S3'e ulasmissa (cevap yolda kaybolmus) satir
+// "received" olur ve misafir yeniden yuklemez.
+func (ur upload_routes_typ) GuestUploadConfirm(w http.ResponseWriter, r *http.Request) {
+	var stat_code = 0
+	var payload interface{}
+	var err error
+
+	defer (func() {
+		if err != nil {
+			if stat_code == 0 {
+				stat_code = 500
+			}
+			http.Error(w, err.Error(), stat_code)
+			return
+		}
+
+		networkutils.SendJson(payload, w)
+	})()
+
+	claims, ok := r.Context().Value("claims").(auth.TokenClaims)
+	if !ok {
+		err = errors.New("unauthorized")
+		stat_code = http.StatusUnauthorized
+		return
+	}
+
+	eventUID, err := utils.UUID.UnpackUUID(mux.Vars(r)["eventPackedUid"])
+	if err != nil {
+		err = utils.Tag_err("guc1", err)
+		stat_code = http.StatusBadRequest
+		return
+	}
+
+	var reqData []uploadConfirmRequest
+	if err = json.NewDecoder(r.Body).Decode(&reqData); err != nil {
+		err = utils.Tag_err("guc2", err)
+		stat_code = http.StatusBadRequest
+		return
+	}
+	if len(reqData) == 0 || len(reqData) > maxConfirmPaths {
+		err = fmt.Errorf("expected 1-%d paths", maxConfirmPaths)
+		stat_code = http.StatusBadRequest
+		return
+	}
+
+	result := make(map[string]uploadreceipt.Status, len(reqData))
+	for _, item := range reqData {
+		upload, found, lookupErr := dbscripts.Guest_upload_by_path(eventUID, claims.UserUID, item.Path)
+		if lookupErr != nil {
+			err = lookupErr
+			return
+		}
+		if !found {
+			// Bu misafire ait degil ya da onceki bir /confirm onu zaten sildi.
+			result[item.Path] = uploadreceipt.Missing
+			continue
+		}
+
+		status, resolveErr := uploadreceipt.Resolve(upload, !item.OK)
+		if resolveErr != nil {
+			// S3'e ya da DB'ye ulasilamadi; satir bekliyor, tarama tekrar bakacak.
+			fmt.Printf("[upload.confirm] %s: %v\n", item.Path, resolveErr)
+		}
+		result[item.Path] = status
+	}
+
+	payload = result
 }
 
 // Delete permanently deletes an upload from the database and S3.

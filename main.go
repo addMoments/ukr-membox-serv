@@ -21,6 +21,7 @@ import (
 
 	sendemail "membox-serv/src/send_email"
 	storagecron "membox-serv/src/storage_cron"
+	uploadreceipt "membox-serv/src/upload_receipt"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
@@ -47,6 +48,7 @@ func init() {
 	sendemail.Init(&e.Smtp)
 	storagecron.Init()
 	promocron.Init()
+	uploadreceipt.Init()
 }
 
 func maiasdn() {
@@ -200,6 +202,8 @@ func main() {
 	apiRoutes.HandleFunc("/event/{eventPackedUID}/order", auth.AuthMiddleware(routes.OrderRoutes.GetMyOrder, "auth")).Methods("GET")
 
 	guestRoutes := apiRoutes.PathPrefix("/guest").Subrouter()
+	// /confirm, {utype} kalibindan ONCE kayitli olmali; gorilla/mux ilk eslesen rotayi calistirir.
+	guestRoutes.HandleFunc("/upload/{eventPackedUid}/confirm", auth.AuthMiddleware(routes.UploadRoutes.GuestUploadConfirm, "webanon")).Methods("POST")
 	guestRoutes.HandleFunc("/upload/{eventPackedUid}/{utype}", auth.AuthMiddleware(routes.UploadRoutes.GuestUpload, "webanon"))
 	guestRoutes.HandleFunc("/whoami", auth.AuthMiddleware(routes.AuthRoutes.WhoAmI, "webanon"))
 	guestRoutes.HandleFunc("/album/{albumPackedUid}/open", auth.AuthMiddleware(routes.AlbumRoutes.GuestOpen, "webanon")).Methods("POST")

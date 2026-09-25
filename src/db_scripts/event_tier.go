@@ -129,6 +129,7 @@ func Event_media_count(eventUID string) (count int, err error) {
 		sb.Equal("event_uid", eventUID),
 		sb.In("upload_type", "photo", "video"),
 		sb.IsNull("trashed_at"),
+		UploadCountsSQL,
 	)
 
 	res, err := db.Query_one(sb)
@@ -146,6 +147,7 @@ func Event_contributor_count(eventUID string) (count int, err error) {
 	sb.Where(
 		sb.Equal("event_uid", eventUID),
 		sb.IsNull("trashed_at"),
+		UploadCountsSQL,
 	)
 
 	res, err := db.Query_one(sb)
@@ -166,6 +168,7 @@ func Has_contributed(eventUID string, clientUID string) (hasContributed bool, er
 		sb.Equal("event_uid", eventUID),
 		sb.Equal("client_uid", clientUID),
 		sb.IsNull("trashed_at"),
+		UploadCountsSQL,
 	)
 
 	res, err := db.Query_one(sb)

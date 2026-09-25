@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -263,6 +264,34 @@ func (sr S3_serv) Exists(path string) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// Stat, key'in boyutunu doner; nesne yoksa exists=false ve hata yok.
+// Neden: misafir yuklemesi dosyasi S3'e ulasmadan galeriye girmesin diye (upload_receipt)
+// yalnizca varlik yetmiyor -- iOS Safari okuyamadigi dosyayi bos govdeyle PUT edip 200 aliyor,
+// geriye 0 baytlik bir nesne kaliyor (21 Eylul, bir misafirin 100 dosyasi).
+// 403 de "yok" sayilir: ListBucket yetkisi olmayan kimlige S3 eksik key icin 404 yerine 403
+// doner; GetObject yetkimiz oldugu icin var olan bir nesnede 403 almayiz.
+func (sr S3_serv) Stat(path string) (size int64, exists bool, err error) {
+	if !sr.Is_init {
+		err = fmt.Errorf("s3 is not init")
+		return
+	}
+
+	out, err := sr.Serv.HeadObject(&s3.HeadObjectInput{
+		Bucket: aws.String(sr.Inf.Bucket),
+		Key:    aws.String(path),
+	})
+	if err != nil {
+		if reqErr, ok := err.(awserr.RequestFailure); ok {
+			if code := reqErr.StatusCode(); code == http.StatusNotFound || code == http.StatusForbidden {
+				return 0, false, nil
+			}
+		}
+		return 0, false, err
+	}
+
+	return aws.Int64Value(out.ContentLength), true, nil
 }
 
 func (sr S3_serv) Url(path string) string {
