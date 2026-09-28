@@ -33,7 +33,7 @@ func activationSignupURL(packedPurchaseUID, email string) (string, error) {
 //
 //	mailin ikinci gonderimde farkli gorunmesi istenmez.
 func sendActivationMail(email, signupURL string) error {
-	return sendemail.Info_mail.Send([]string{email}, "Add Moments Payment Confirmation", func(w io.WriteCloser) {
+	return sendemail.Info_mail.SendAndKeepCopy([]string{email}, "Add Moments Payment Confirmation", func(w io.WriteCloser) {
 		sendemail.Write_html(w, "Thank you for your payment!", []string{
 			"Your order has been confirmed. Click the button below to set up your account and access your event.",
 			sendemail.Button(signupURL, "Set Up My Account"),

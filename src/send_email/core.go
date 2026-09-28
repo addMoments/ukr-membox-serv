@@ -67,7 +67,49 @@ func (m *Mail_serv) Send(
 	subject string,
 	write_f func(io.WriteCloser),
 	extra_headers map[string]string,
-) (err error) {
+) error {
+	_, err := m.send(to, subject, write_f, extra_headers)
+	return err
+}
+
+// Ne: Send gibi gonderir; gonderim basariliysa mesajin birebir kopyasini noreply
+//
+//	kutusunun Gonderilenler klasorune koyar.
+//
+// Nasil: Kopya ayri bir goroutine'de yazilir; hatasi yalnizca loglanir.
+// Neden: Kopya bir kayit, alicinin maili onu beklememeli ve onun yuzunden basarisiz
+//
+//	sayilmamali. Yalnizca aktivasyon maili kullaniyor: parola sifirlama linkleri
+//	kutuya dusseydi, kutuya erisen herkes baskasinin hesabina girebilirdi.
+func (m *Mail_serv) SendAndKeepCopy(
+	to []string,
+	subject string,
+	write_f func(io.WriteCloser),
+	extra_headers map[string]string,
+) error {
+	raw, err := m.send(to, subject, write_f, extra_headers)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		if err := m.save_sent_copy(raw); err != nil {
+			fmt.Printf("[email] WARN: sent copy not saved to=%v err=%v\n", to, err)
+			return
+		}
+		fmt.Printf("[email] sent copy saved to=%v\n", to)
+	}()
+
+	return nil
+}
+
+// Gonderir ve SMTP'ye yazilan ham mesaji dondurur.
+func (m *Mail_serv) send(
+	to []string,
+	subject string,
+	write_f func(io.WriteCloser),
+	extra_headers map[string]string,
+) (raw []byte, err error) {
 	fmt.Printf("[email] sending to=%v subject=%q\n", to, subject)
 
 	// Govde once bellege yazilir: hem duz metin alternatifi ondan uretilecek,
@@ -81,7 +123,7 @@ func (m *Mail_serv) Send(
 	client, err := m.dial()
 	if err != nil {
 		fmt.Printf("[email] ERROR: connect failed: %v\n", err)
-		return utils.Tag_err("se1", err)
+		return nil, utils.Tag_err("se1", err)
 	}
 	defer client.Close()
 
@@ -89,37 +131,38 @@ func (m *Mail_serv) Send(
 
 	if err := client.Mail(from); err != nil {
 		fmt.Printf("[email] ERROR: set sender failed from=%s err=%v\n", from, err)
-		return utils.Tag_err("se2", err)
+		return nil, utils.Tag_err("se2", err)
 	}
 
 	for _, addr := range to {
 		if err := client.Rcpt(addr); err != nil {
 			fmt.Printf("[email] ERROR: set recipient failed addr=%s err=%v\n", addr, err)
-			return utils.Tag_err("se3", err)
+			return nil, utils.Tag_err("se3", err)
 		}
 	}
 
 	w, err := client.Data()
 	if err != nil {
 		fmt.Printf("[email] ERROR: open data writer failed: %v\n", err)
-		return utils.Tag_err("se4", err)
+		return nil, utils.Tag_err("se4", err)
 	}
 
-	if _, err = w.Write(m.build_message(to, subject, htmlBody.Bytes(), extra_headers)); err != nil {
+	raw = m.build_message(to, subject, htmlBody.Bytes(), extra_headers)
+	if _, err = w.Write(raw); err != nil {
 		fmt.Printf("[email] ERROR: write message failed to=%v err=%v\n", to, err)
 		w.Close()
-		return utils.Tag_err("se5", err)
+		return nil, utils.Tag_err("se5", err)
 	}
 
 	if err = w.Close(); err != nil {
 		fmt.Printf("[email] ERROR: close data writer (SMTP rejected message) to=%v err=%v\n", to, err)
-		return err
+		return nil, err
 	}
 
 	client.Quit()
 
 	fmt.Printf("[email] OK sent to=%v subject=%q\n", to, subject)
-	return nil
+	return raw, nil
 }
 
 // Ne: Tam RFC 5322 mesajini uretir -- basliklar + multipart/alternative govde.
