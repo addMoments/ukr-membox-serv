@@ -421,6 +421,9 @@ func (ar album_routes_typ) GuestOpen(w http.ResponseWriter, r *http.Request) {
 // GuestZip, gorunur bir albumun tum medyasini sikistirmadan zip olarak akitir (karar 4).
 // Kontrol: album misafire acik + guest_download_all + etkinlik guest_gallery + album guest_view.
 // GET /api/guest/album/{albumPackedUid}/zip
+// maxGuestZipSelection: misafirin secip tek zip'te indirebilecegi en fazla dosya (AM-12; arayuz 30'da durur).
+const maxGuestZipSelection = 50
+
 func (ar album_routes_typ) GuestZip(w http.ResponseWriter, r *http.Request) {
 	var stat_code = 0
 	var err error
@@ -460,6 +463,27 @@ func (ar album_routes_typ) GuestZip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// AM-12: ?uids=a,b,c (packed) yalnizca secilenleri zip'ler. Fotograflar gorunurken tek tek kaydetme
+	// her zaman acik; secim onun toplu hali oldugu icin "tumunu kaydet" (guest_download_all) aranmaz.
+	var selected []interface{}
+	if raw := strings.TrimSpace(r.URL.Query().Get("uids")); raw != "" {
+		parts := strings.Split(raw, ",")
+		if len(parts) > maxGuestZipSelection {
+			err = fmt.Errorf("at most %d files", maxGuestZipSelection)
+			stat_code = http.StatusBadRequest
+			return
+		}
+		for _, part := range parts {
+			uploadUID, unpackErr := utils.UUID.UnpackUUID(strings.TrimSpace(part))
+			if unpackErr != nil {
+				err = utils.Tag_err("alz4", unpackErr)
+				stat_code = http.StatusBadRequest
+				return
+			}
+			selected = append(selected, uploadUID)
+		}
+	}
+
 	album, err := dbscripts.Get_album(albumUID)
 	if err != nil {
 		return
@@ -471,7 +495,7 @@ func (ar album_routes_typ) GuestZip(w http.ResponseWriter, r *http.Request) {
 	if err = dbscripts.Guest_album_access(album, eventUID, galleryOn, claims.Al); err != nil {
 		return
 	}
-	if !galleryOn || !album.GuestView || !album.GuestDownloadAll {
+	if !galleryOn || !album.GuestView || (len(selected) == 0 && !album.GuestDownloadAll) {
 		err = dbscripts.ErrAlbumClosed
 		return
 	}
@@ -483,6 +507,9 @@ func (ar album_routes_typ) GuestZip(w http.ResponseWriter, r *http.Request) {
 		sb.In("upload_type", "photo", "video"),
 		sb.IsNotNull("received_at"),
 	).OrderBy("created_at ASC")
+	if len(selected) > 0 {
+		sb.Where(sb.In("uid", selected...))
+	}
 	rows, err := db.Query_all(sb)
 	if err != nil {
 		err = utils.Tag_err("alz3", err)
@@ -497,6 +524,9 @@ func (ar album_routes_typ) GuestZip(w http.ResponseWriter, r *http.Request) {
 	}, album.Name)
 	if safeName == "" {
 		safeName = "album"
+	}
+	if len(selected) > 0 {
+		safeName += "-selection"
 	}
 
 	w.Header().Set("Content-Type", "application/zip")
@@ -549,5 +579,5 @@ func (ar album_routes_typ) GuestZip(w http.ResponseWriter, r *http.Request) {
 	if closeErr := zw.Close(); closeErr != nil {
 		log.Printf("[album.zip] close failed: %v", closeErr)
 	}
-	log.Printf("[album.zip] event=%s album=%s files=%d", eventUID, albumUID, added)
+	log.Printf("[album.zip] event=%s album=%s files=%d selected=%d", eventUID, albumUID, added, len(selected))
 }
