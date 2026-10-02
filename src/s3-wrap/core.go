@@ -270,9 +270,16 @@ func (sr S3_serv) Exists(path string) (bool, error) {
 // Neden: misafir yuklemesi dosyasi S3'e ulasmadan galeriye girmesin diye (upload_receipt)
 // yalnizca varlik yetmiyor -- iOS Safari okuyamadigi dosyayi bos govdeyle PUT edip 200 aliyor,
 // geriye 0 baytlik bir nesne kaliyor (21 Eylul, bir misafirin 100 dosyasi).
+func (sr S3_serv) Stat(path string) (size int64, exists bool, err error) {
+	size, _, exists, err = sr.Head(path)
+	return
+}
+
+// Head, Stat gibi ama nesnenin ETag'ini de doner. Presign'li tek parcali PUT'ta ETag icerigin
+// MD5'idir; ayni dosyanin ikinci kez yuklendigini baytlari indirmeden anlamaya yeter (AM-07).
 // 403 de "yok" sayilir: ListBucket yetkisi olmayan kimlige S3 eksik key icin 404 yerine 403
 // doner; GetObject yetkimiz oldugu icin var olan bir nesnede 403 almayiz.
-func (sr S3_serv) Stat(path string) (size int64, exists bool, err error) {
+func (sr S3_serv) Head(path string) (size int64, etag string, exists bool, err error) {
 	if !sr.Is_init {
 		err = fmt.Errorf("s3 is not init")
 		return
@@ -285,13 +292,13 @@ func (sr S3_serv) Stat(path string) (size int64, exists bool, err error) {
 	if err != nil {
 		if reqErr, ok := err.(awserr.RequestFailure); ok {
 			if code := reqErr.StatusCode(); code == http.StatusNotFound || code == http.StatusForbidden {
-				return 0, false, nil
+				return 0, "", false, nil
 			}
 		}
-		return 0, false, err
+		return 0, "", false, err
 	}
 
-	return aws.Int64Value(out.ContentLength), true, nil
+	return aws.Int64Value(out.ContentLength), aws.StringValue(out.ETag), true, nil
 }
 
 func (sr S3_serv) Url(path string) string {

@@ -11,6 +11,9 @@
 // ve bos nesne silinir; hic yoksa satir yalnizca tarayici "bu anahtarla isim bitti" dediginde
 // silinir, aksi halde yukleme suruyor olabilir diye bekler. Bir gun sonra tarama da birakir;
 // satir gizli kalir ve UploadCountsSQL geregi hicbir kotaya girmez.
+// Ayni albumde ayni dosya zaten gorunurse yeni satir ve nesnesi silinir (AM-07): misafirler ayni
+// fotograflari ertesi gun yeniden secip yukluyordu, galeride kopyalar birikiyor ve host birini
+// silince fotograf "silinmedi" gibi gorunuyordu.
 package uploadreceipt
 
 import (
@@ -32,6 +35,8 @@ const (
 	Missing Status = "missing"
 	// Empty: PUT bos govdeyle bitmis (iOS okunamayan dosya); satir ve bos nesne silindi.
 	Empty Status = "empty"
+	// Duplicate: ayni dosya bu albumde zaten var; yeni satir ve nesne silindi. Misafir icin basari.
+	Duplicate Status = "duplicate"
 )
 
 const (
@@ -52,13 +57,27 @@ func Resolve(u dbscripts.PendingUpload, clientDone bool) (Status, error) {
 		return Received, nil
 	}
 
-	size, exists, err := s3wrap.Public_s3.Stat(u.Value)
+	size, etag, exists, err := s3wrap.Public_s3.Head(u.Value)
 	if err != nil {
 		return Pending, err
 	}
 
 	switch {
 	case exists && size > 0:
+		dup, dupErr := isDuplicate(u, size, etag)
+		if dupErr != nil {
+			// Kontrol edilemedi: yuklemeyi kaybetmektense olasi bir kopyayi gostermek iyidir.
+			fmt.Printf("[upload_receipt] duplicate check %s: %v\n", u.Value, dupErr)
+		}
+		if dup {
+			if err = dbscripts.Drop_pending_upload(u.UID); err != nil {
+				return Pending, err
+			}
+			if rmErr := s3wrap.Public_s3.Rm(u.Value); rmErr != nil {
+				fmt.Printf("[upload_receipt] duplicate object not removed %s: %v\n", u.Value, rmErr)
+			}
+			return Duplicate, nil
+		}
 		if err = dbscripts.Mark_upload_received(u.UID, size); err != nil {
 			return Pending, err
 		}
@@ -81,6 +100,29 @@ func Resolve(u dbscripts.PendingUpload, clientDone bool) (Status, error) {
 	}
 
 	return Pending, nil
+}
+
+// isDuplicate, ayni albumde ayni boyutta gorunur bir dosyanin ETag'i (icerigin MD5'i) bununkiyle
+// ayni mi diye bakar. ETag yoksa karar verilmez.
+func isDuplicate(u dbscripts.PendingUpload, size int64, etag string) (bool, error) {
+	if etag == "" {
+		return false, nil
+	}
+	candidates, err := dbscripts.Duplicate_candidates(u, size)
+	if err != nil {
+		return false, err
+	}
+	for _, c := range candidates {
+		_, otherETag, exists, headErr := s3wrap.Public_s3.Head(c.Value)
+		if headErr != nil {
+			err = headErr
+			continue
+		}
+		if exists && otherETag == etag {
+			return true, nil
+		}
+	}
+	return false, err
 }
 
 // Init, main.go'dan cagirilir; taramayi dakikada bir calistirir.
@@ -114,9 +156,9 @@ func RunOnce() error {
 		counts[status]++
 	}
 
-	if counts[Received] > 0 || counts[Empty] > 0 {
-		fmt.Printf("[upload_receipt] sweep pending=%d received=%d empty=%d still_pending=%d\n",
-			len(list), counts[Received], counts[Empty], counts[Pending])
+	if counts[Received] > 0 || counts[Empty] > 0 || counts[Duplicate] > 0 {
+		fmt.Printf("[upload_receipt] sweep pending=%d received=%d empty=%d duplicate=%d still_pending=%d\n",
+			len(list), counts[Received], counts[Empty], counts[Duplicate], counts[Pending])
 	}
 	return nil
 }

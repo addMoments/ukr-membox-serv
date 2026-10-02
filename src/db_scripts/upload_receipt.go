@@ -30,17 +30,36 @@ import (
 const UploadCountsSQL = "(received_at IS NOT NULL OR created_at > LOCALTIMESTAMP - INTERVAL '1 hour')"
 
 // PendingUpload, henuz S3'te dogrulanmamis ya da yeni dogrulanmis bir yukleme satiri.
+// EventUID / AlbumUID / UploadType ayni dosyanin ayni albume ikinci kez gelip gelmedigine
+// bakmak icin (AM-07); AlbumUID bos = albumsuz satir.
 type PendingUpload struct {
-	UID      string
-	Value    string
-	Received bool
+	UID        string
+	Value      string
+	Received   bool
+	EventUID   string
+	AlbumUID   string
+	UploadType string
+}
+
+// pendingUploadCols, PendingUpload'i dolduran kolonlar; scanPendingUpload ile ayni sirada.
+var pendingUploadCols = []string{"uid", "value", "received_at IS NOT NULL", "event_uid", "album_uid", "upload_type"}
+
+func scanPendingUpload(row [][]byte) PendingUpload {
+	return PendingUpload{
+		UID:        strings.TrimSpace(string(row[0])),
+		Value:      string(row[1]),
+		Received:   pgBool(row[2]),
+		EventUID:   strings.TrimSpace(string(row[3])),
+		AlbumUID:   strings.TrimSpace(string(row[4])),
+		UploadType: string(row[5]),
+	}
 }
 
 // Guest_upload_by_path, misafirin kendi yuklemesini S3 yoluyla bulur. Yol bu etkinlige ve bu
 // misafire ait degilse found=false; yani bir misafir baskasinin satirini dogrulayamaz ya da silemez.
 func Guest_upload_by_path(eventUID string, clientUID string, value string) (u PendingUpload, found bool, err error) {
 	sb := sqlbuilder.NewSelectBuilder()
-	sb.Select("uid", "value", "received_at IS NOT NULL").From("uploads").Where(
+	sb.Select(pendingUploadCols...).From("uploads").Where(
 		sb.Equal("event_uid", eventUID),
 		sb.Equal("client_uid", clientUID),
 		sb.Equal("value", value),
@@ -55,12 +74,41 @@ func Guest_upload_by_path(eventUID string, clientUID string, value string) (u Pe
 		return
 	}
 
-	u = PendingUpload{
-		UID:      string(rows[0][0]),
-		Value:    string(rows[0][1]),
-		Received: pgBool(rows[0][2]),
+	return scanPendingUpload(rows[0]), true, nil
+}
+
+// Duplicate_candidates, ayni albumde ayni boyutta gorunur (dogrulanmis, copte olmayan) foto/video
+// satirlarini doner. Icerigin gercekten ayni olup olmadigina cagiran ETag ile bakar; boyut yalnizca
+// S3'e gidecek HEAD sayisini birkaca indirir. Kimin yukledigine bakilmaz: ayni dosya ayni albumde
+// bir kez durur. Farkli albume yukleme bilincli bir secim, ona dokunulmaz.
+func Duplicate_candidates(u PendingUpload, size int64) (list []PendingUpload, err error) {
+	sb := sqlbuilder.NewSelectBuilder()
+	sb.Select(pendingUploadCols...).From("uploads")
+	sb.Where(
+		sb.Equal("event_uid", u.EventUID),
+		sb.Equal("upload_type", u.UploadType),
+		sb.In("upload_type", "photo", "video"),
+		sb.Equal("size_bytes", size),
+		sb.NotEqual("uid", u.UID),
+		"received_at IS NOT NULL",
+		"trashed_at IS NULL",
+	)
+	if u.AlbumUID == "" {
+		sb.Where("album_uid IS NULL")
+	} else {
+		sb.Where(sb.Equal("album_uid", u.AlbumUID))
 	}
-	return u, true, nil
+	sb.OrderBy("created_at").Asc().Limit(5)
+
+	rows, err := db.Query_all(sb)
+	if err != nil {
+		err = utils.Tag_err("urc5", err)
+		return
+	}
+	for _, row := range rows {
+		list = append(list, scanPendingUpload(row))
+	}
+	return
 }
 
 // Mark_upload_received, satiri gorunur yapar ve boyutu S3'teki gercek boyutla degistirir.
@@ -96,7 +144,7 @@ func Drop_pending_upload(uploadUID string) error {
 // dogrulanmamis medya satirlarini eskiden yeniye doner.
 func Pending_uploads(minAge time.Duration, maxAge time.Duration, limit int) (list []PendingUpload, err error) {
 	bldr := sqlbuilder.BuildNamed(`
-		SELECT uid, value
+		SELECT uid, value, received_at IS NOT NULL, event_uid, album_uid, upload_type
 		FROM uploads
 		WHERE received_at IS NULL
 		  AND upload_type IN ('photo', 'video', 'voice')
@@ -117,10 +165,7 @@ func Pending_uploads(minAge time.Duration, maxAge time.Duration, limit int) (lis
 	}
 
 	for _, row := range rows {
-		list = append(list, PendingUpload{
-			UID:   strings.TrimSpace(string(row[0])),
-			Value: string(row[1]),
-		})
+		list = append(list, scanPendingUpload(row))
 	}
 	return
 }

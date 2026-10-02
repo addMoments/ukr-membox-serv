@@ -425,6 +425,11 @@ func (ur upload_routes_typ) GuestUploadConfirm(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// "duplicate"i yalnizca onu tanidigini ?dedupe=1 ile soyleyen arayuze don. Eski arayuz (deploy'dan
+	// once acilmis sayfalar) onu basarisiz sayip dosyayi tekrar yukluyor ve sonunda hata gosteriyordu;
+	// dosya zaten albumde oldugu icin ona "received" demek dogru.
+	knowsDuplicate := r.URL.Query().Get("dedupe") == "1"
+
 	result := make(map[string]uploadreceipt.Status, len(reqData))
 	for _, item := range reqData {
 		upload, found, lookupErr := dbscripts.Guest_upload_by_path(eventUID, claims.UserUID, item.Path)
@@ -442,6 +447,9 @@ func (ur upload_routes_typ) GuestUploadConfirm(w http.ResponseWriter, r *http.Re
 		if resolveErr != nil {
 			// S3'e ya da DB'ye ulasilamadi; satir bekliyor, tarama tekrar bakacak.
 			fmt.Printf("[upload.confirm] %s: %v\n", item.Path, resolveErr)
+		}
+		if status == uploadreceipt.Duplicate && !knowsDuplicate {
+			status = uploadreceipt.Received
 		}
 		result[item.Path] = status
 	}
