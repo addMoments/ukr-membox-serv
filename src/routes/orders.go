@@ -147,6 +147,7 @@ func buildActiveOrderAccountPayload(purchaseUID string) (types.Js_object, bool, 
 		"guest_limit":        guestLimit,
 		"total_size_mb":      totalSizeMB,
 		"storage_expiration": string(eventRow[1]),
+		"event_closed":       false,
 	}, true, nil
 }
 
@@ -200,6 +201,8 @@ func buildSnapshotOrderAccountPayload(purchaseUID string) (types.Js_object, erro
 		"guest_limit":        guestLimit,
 		"total_size_mb":      totalSizeMB,
 		"storage_expiration": string(eventRow[1]),
+		// Siparis ekraninda etkinlik QR'i yalnizca acik etkinlikte gosterilir.
+		"event_closed": true,
 	}, nil
 }
 
