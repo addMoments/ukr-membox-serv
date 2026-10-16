@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,15 +101,18 @@ type adminEventUpdateReq struct {
 }
 
 // PATCH /api/admin/events/{eventUID}
-// Ne: Bir event'in aktivasyon tarihini gunceller.
-// Nasil: Yalnizca activation_date yazilir; active_until'i DB trigger'i paketin
+// Ne: Bir event'in aktivasyon tarihini gunceller; event aktive olduktan sonra da.
+// Nasil: Yalnizca activation_date yazilir; active_until / storage_until'i DB trigger'i paketin
 //
-//	activation_days degerine gore kendisi yeniden hesaplar.
+//	activation_days / storage_days degerine gore kendisi yeniden hesaplar. Trigger aktive olmus
+//	event'te degisikligi reddediyor; bu uc ayni transaction icinde
+//	membox.admin_date_override = 'on' kurarak (13-admin-activation-date.sql) o kilidi yalnizca
+//	kendisi icin acar. Host ayarlari ve PostgREST yolu kilitli kalir.
 //
-// Neden: Excel 2.1d. Onemli kisit: trigger, event bir kez aktive olduktan sonra
+// Neden: Excel 2.1d; musteri 14 Ekim'de adminin aktivasyondan sonra da tarihi duzeltebilmesini
 //
-//	tarihi degistirmeyi reddediyor. O hatayi 409 olarak, sebebiyle birlikte
-//	doneriz -- kullanici genel bir hata yerine nedenini gorsun.
+//	istedi. Yeni depolama bitisi gecmiste kaliyorsa degisiklik geri alinir: depolama cron'u o
+//	event'i hemen siler, bu bir tarih duzeltmesinin yan etkisi olmamali.
 func (a admin_event_routes_typ) UpdateActivationDate(w http.ResponseWriter, r *http.Request) {
 	eventUID := mux.Vars(r)["eventUID"]
 
@@ -130,36 +134,58 @@ func (a admin_event_routes_typ) UpdateActivationDate(w http.ResponseWriter, r *h
 		return
 	}
 
-	ub := sqlbuilder.NewUpdateBuilder()
-	ub.Update("events").Set(
-		ub.Assign("activation_date", parsed),
-	).Where(
-		ub.Equal("uid", eventUID),
-		ub.IsNull("deleted_at"),
-	)
-	ub.SQL("RETURNING activation_date::text, active_until::text")
-
-	rows, err := db.Query_all(ub)
+	tx, err := db.Db().BeginTx(r.Context(), nil)
 	if err != nil {
-		// Trigger'in kendi mesajini kullaniciya aynen tasiriz; baska bir yerde
-		// tekrarlanan bir metin tutmaktan iyidir.
+		http.Error(w, utils.Tag_err("ael2", err).Error(), http.StatusInternalServerError)
+		return
+	}
+	// Commit edilmezse (hata ya da red) degisiklik geri alinir; commit'ten sonra etkisiz.
+	defer tx.Rollback()
+
+	// is_local=true: ayar yalnizca bu transaction'da gecerli, havuzdaki baglantiya kalmaz.
+	if _, err := tx.Exec(`SELECT set_config('membox.admin_date_override', 'on', true)`); err != nil {
+		http.Error(w, utils.Tag_err("ael2.1", err).Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var activationDate, activeUntil, storageUntil string
+	var storageInPast bool
+	err = tx.QueryRow(`
+		UPDATE events
+		SET activation_date = $1
+		WHERE uid = $2 AND deleted_at IS NULL
+		RETURNING activation_date::text, COALESCE(active_until::text, ''), COALESCE(storage_until::text, ''),
+			COALESCE(storage_until <= NOW(), false)
+	`, parsed, eventUID).Scan(&activationDate, &activeUntil, &storageUntil, &storageInPast)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "event not found or already deleted", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		// Migration (13) henuz uygulanmadiysa trigger eski haliyle reddeder; sebebi aynen tasiriz.
 		if strings.Contains(err.Error(), "Cannot modify activation_date") {
 			http.Error(w, "this event has already been activated, so its activation date can no longer be changed", http.StatusConflict)
 			return
 		}
-		http.Error(w, utils.Tag_err("ael2", err).Error(), http.StatusInternalServerError)
+		http.Error(w, utils.Tag_err("ael2.2", err).Error(), http.StatusInternalServerError)
 		return
 	}
-	if len(rows) == 0 {
-		http.Error(w, "event not found or already deleted", http.StatusNotFound)
+	if storageInPast {
+		http.Error(w, "with this activation date the event's storage period would already be over and the event would be deleted; choose a later date", http.StatusConflict)
 		return
 	}
 
-	fmt.Printf("[admin.event] activation_date updated event=%s to=%s\n", eventUID, parsed)
+	if err := tx.Commit(); err != nil {
+		http.Error(w, utils.Tag_err("ael2.3", err).Error(), http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Printf("[admin.event] activation_date updated event=%s to=%s active_until=%s storage_until=%s\n", eventUID, parsed, activeUntil, storageUntil)
 
 	networkutils.SendJson(types.Js_object{
-		"activation_date": string(rows[0][0]),
-		"active_until":    string(rows[0][1]),
+		"activation_date": activationDate,
+		"active_until":    activeUntil,
+		"storage_until":   storageUntil,
 	}, w)
 }
 
