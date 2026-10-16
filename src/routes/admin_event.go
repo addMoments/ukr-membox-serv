@@ -10,6 +10,7 @@ import (
 	db "membox-serv/src/db_layer"
 	eventcleanup "membox-serv/src/event_cleanup"
 	networkutils "membox-serv/src/network_utils"
+	s3wrap "membox-serv/src/s3-wrap"
 	"membox-serv/src/types"
 	"membox-serv/src/utils"
 	"net/http"
@@ -239,6 +240,144 @@ func (a admin_event_routes_typ) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	networkutils.SendJson(types.Js_object{"success": true, "already_closed": false}, w)
+}
+
+// DELETE /api/admin/events/{eventUID}/permanent
+// Ne: Kapatilmis bir event'i tamamen kaldirir: kaydi, albumleri, misafirleri, ani defteri ve
+//
+//	ses kayitlari, rapor ozeti (snapshot), disa aktarma isleri ve S3'te kalan butun dosyalari.
+//
+// Nasil: Yalnizca once kapatilmis (deleted_at dolu) event'te calisir. Once S3 temizlenir:
+//
+//	events/<packed>/ (yuklemeler, QR'lar, disa aktarma zip'leri), advertorial/<uid>/ (reklam
+//	gorselleri) ve hostun /uload/ altina yukledigi etkinlik gorseli ile album kapaklari. Bir
+//	dosya silinemezse DB'ye dokunulmaz, istek tekrar denenebilir. Sonra DB tek transaction'da.
+//	Siparis (purchases / carts / cart_items) bilerek kalir: odeme ve muhasebe kaydi.
+//
+// Neden: Excel 2.15; musteri 14 Ekim'de kapatmadan sonra "tamamen kaldirma" secenegi istedi.
+func (a admin_event_routes_typ) DeletePermanently(w http.ResponseWriter, r *http.Request) {
+	eventUID := mux.Vars(r)["eventUID"]
+
+	claims, ok := r.Context().Value("claims").(auth.TokenClaims)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var name, image string
+	var closed bool
+	err := db.Db().QueryRowContext(r.Context(), `
+		SELECT COALESCE(name, ''), COALESCE(image, ''), deleted_at IS NOT NULL
+		FROM events WHERE uid = $1
+	`, eventUID).Scan(&name, &image, &closed)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "event not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, utils.Tag_err("aep1", err).Error(), http.StatusInternalServerError)
+		return
+	}
+	if !closed {
+		http.Error(w, "close the event first; only a closed event can be removed permanently", http.StatusConflict)
+		return
+	}
+
+	packed, err := utils.UUID.PackUUID(eventUID)
+	if err != nil {
+		http.Error(w, utils.Tag_err("aep2", err).Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Hostun kendi yuklemeleri (/uload/<kullanici>/...) kullanici klasorunde duruyor; yalnizca bu
+	// event'in kaydinda gecenler silinir.
+	keys := map[string]bool{}
+	addKey := func(raw string) {
+		key := strings.TrimPrefix(strings.TrimSpace(raw), "/")
+		if key != "" {
+			keys[key] = true
+		}
+	}
+	if strings.HasPrefix(strings.TrimPrefix(image, "/"), "uload/") {
+		addKey(image)
+	}
+	coverRows, err := db.Db().QueryContext(r.Context(), `SELECT COALESCE(cover, '') FROM albums WHERE event_uid = $1`, eventUID)
+	if err != nil {
+		http.Error(w, utils.Tag_err("aep3", err).Error(), http.StatusInternalServerError)
+		return
+	}
+	for coverRows.Next() {
+		var cover string
+		if err := coverRows.Scan(&cover); err == nil && strings.HasPrefix(strings.TrimPrefix(cover, "/"), "uload/") {
+			addKey(cover)
+		}
+	}
+	coverRows.Close()
+
+	for _, prefix := range []string{"events/" + packed + "/", "advertorial/" + eventUID + "/"} {
+		listed, err := s3wrap.Public_s3.Ls_all(prefix)
+		if err != nil {
+			http.Error(w, utils.Tag_err("aep4", err).Error(), http.StatusBadGateway)
+			return
+		}
+		for _, key := range listed {
+			addKey(key)
+		}
+	}
+
+	failed := 0
+	for key := range keys {
+		if err := s3wrap.Public_s3.Rm(key); err != nil {
+			failed++
+			fmt.Printf("[admin.event] WARN: permanent delete could not remove s3 key=%s err=%v\n", key, err)
+		}
+	}
+	if failed > 0 {
+		http.Error(w, fmt.Sprintf("%d of %d files could not be removed from storage; nothing was deleted from the database, please try again", failed, len(keys)), http.StatusBadGateway)
+		return
+	}
+
+	tx, err := db.Db().BeginTx(r.Context(), nil)
+	if err != nil {
+		http.Error(w, utils.Tag_err("aep5", err).Error(), http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	counts := types.Js_object{}
+	steps := []struct {
+		label string
+		query string
+	}{
+		{"uploads", `DELETE FROM uploads WHERE event_uid = $1`},
+		{"albums", `DELETE FROM albums WHERE event_uid = $1`},
+		{"participants", `DELETE FROM participants WHERE event_uid = $1`},
+		{"snapshots", `DELETE FROM event_upload_snapshots WHERE event_uid = $1`},
+		{"jobs", `DELETE FROM jobs WHERE input->>'event_uid' = $1::text`},
+		{"events", `DELETE FROM events WHERE uid = $1 AND deleted_at IS NOT NULL`},
+	}
+	for _, step := range steps {
+		res, err := tx.Exec(step.query, eventUID)
+		if err != nil {
+			http.Error(w, utils.Tag_err("aep6."+step.label, err).Error(), http.StatusInternalServerError)
+			return
+		}
+		n, _ := res.RowsAffected()
+		counts[step.label] = n
+	}
+	if counts["events"] != int64(1) {
+		http.Error(w, "event not found or not closed", http.StatusConflict)
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		http.Error(w, utils.Tag_err("aep7", err).Error(), http.StatusInternalServerError)
+		return
+	}
+	counts["files"] = len(keys)
+
+	fmt.Printf("[admin.event] permanently deleted event=%s name=%q actor=%s counts=%v\n", eventUID, name, claims.UserUID, counts)
+
+	networkutils.SendJson(types.Js_object{"success": true, "removed": counts}, w)
 }
 
 // Panelden gelen tarih ya sade gun (date input) ya da tam zaman damgasi olabilir.

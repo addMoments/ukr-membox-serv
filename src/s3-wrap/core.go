@@ -246,6 +246,32 @@ func (sr S3_serv) Ls(path string) ([]string, error) {
 	return flist, nil
 }
 
+// Ls_all, Ls gibi prefix altindaki anahtarlari dondurur ama sayfa sayfa ilerler.
+// Ls tek ListObjects cagrisiyla en fazla 1000 anahtar verir; tumunu silmek gereken
+// yerde (etkinligi kalici silme) eksik kalmasin diye ayri.
+func (sr S3_serv) Ls_all(prefix string) ([]string, error) {
+	if !sr.Is_init {
+		return nil, fmt.Errorf("s3 is not init")
+	}
+
+	keys := make([]string, 0)
+	err := sr.Serv.ListObjectsPages(&s3.ListObjectsInput{
+		Bucket: aws.String(sr.Inf.Bucket),
+		Prefix: aws.String(prefix),
+	}, func(page *s3.ListObjectsOutput, lastPage bool) bool {
+		for _, obj := range page.Contents {
+			if obj.Key != nil {
+				keys = append(keys, *obj.Key)
+			}
+		}
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
 // Exists, verilen key'in bucket icinde var olup olmadigini kontrol eder.
 func (sr S3_serv) Exists(path string) (bool, error) {
 	if !sr.Is_init {
