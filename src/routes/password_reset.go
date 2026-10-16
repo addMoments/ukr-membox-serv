@@ -73,12 +73,20 @@ func (rfrnc password_reset_routes_typ) Request(w http.ResponseWriter, r *http.Re
 	resetLink := siteRoot + "/reset-password/" + token
 
 	go func() {
-		mailErr := sendemail.Info_mail.Send([]string{req.Email}, "Reset your Add Moments password", func(w io.WriteCloser) {
+		// Gonderilenler'deki kopyada link yok (madde 2.2): mail gittigi gorulsun ama kutuya erisen
+		// biri o linkle musterinin hesabina giremesin.
+		mailErr := sendemail.Info_mail.SendAndKeepRedactedCopy([]string{req.Email}, "Reset your Add Moments password", func(w io.WriteCloser) {
 			sendemail.Write_html(w, "Reset your password", []string{
 				"We received a request to reset your password. Click the button below to choose a new one. This link expires in 60 minutes.",
 				sendemail.Button(resetLink, "Reset Password"),
 				"If you didn't request this, you can safely ignore this email. Your password won't change.",
 				"If the button doesn't work, copy and paste this link into your browser:<br>" + resetLink,
+			})
+		}, func(w io.WriteCloser) {
+			sendemail.Write_html(w, "Reset your password", []string{
+				"We received a request to reset your password. Click the button below to choose a new one. This link expires in 60 minutes.",
+				"<i>[Copy for the Add Moments team: the reset link is removed from this copy for security. The customer received a working link that expires in 60 minutes.]</i>",
+				"If you didn't request this, you can safely ignore this email. Your password won't change.",
 			})
 		}, nil)
 		if mailErr != nil {

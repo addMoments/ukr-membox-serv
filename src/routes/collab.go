@@ -316,7 +316,8 @@ func (cr collaborator_routes_typ) New(w http.ResponseWriter, r *http.Request) {
 	signupLink := "https://addmoments.com.ua/signup/" + encPaymentTkn
 	fmt.Printf("[collab.New] sending invite email to=%s link=%s\n", req.Email, signupLink)
 
-	mailErr := sendemail.Info_mail.Send([]string{req.Email}, "Add Moments Collaborator Invitation", func(w io.WriteCloser) {
+	// Kopya noreply Gonderilenler'e de duser (madde 2.2): davet ulasmazsa destek linki oradan iletebilir.
+	mailErr := sendemail.Info_mail.SendAndKeepCopy([]string{req.Email}, "Add Moments Collaborator Invitation", func(w io.WriteCloser) {
 		sendemail.Write_html(w, "You've been invited!", []string{
 			"You have been invited to collaborate on an event on Add Moments. Click the button below to create your account.",
 			sendemail.Button(signupLink, "Accept Invitation"),

@@ -149,7 +149,8 @@ func sendOneWarning(c warnCandidate) error {
 
 	subject := "Your event will be deleted in 14 days"
 
-	return sendemail.Info_mail.Send(c.AdminMails, subject, func(w io.WriteCloser) {
+	// Kopya noreply Gonderilenler'e de duser (madde 2.2).
+	return sendemail.Info_mail.SendAndKeepCopy(c.AdminMails, subject, func(w io.WriteCloser) {
 		sendemail.Write_html(w, "Your event storage is about to expire", []string{
 			fmt.Sprintf(
 				`Your event "%s" will be permanently deleted on <b>%s</b>. After this date, all photos, videos and content will be removed.`,

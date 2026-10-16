@@ -68,7 +68,7 @@ func (m *Mail_serv) Send(
 	write_f func(io.WriteCloser),
 	extra_headers map[string]string,
 ) error {
-	_, err := m.send(to, subject, write_f, extra_headers)
+	_, err := m.send(to, subject, write_f, extra_headers, m.new_message_ids())
 	return err
 }
 
@@ -79,19 +79,51 @@ func (m *Mail_serv) Send(
 // Nasil: Kopya ayri bir goroutine'de yazilir; hatasi yalnizca loglanir.
 // Neden: Kopya bir kayit, alicinin maili onu beklememeli ve onun yuzunden basarisiz
 //
-//	sayilmamali. Yalnizca aktivasyon maili kullaniyor: parola sifirlama linkleri
-//	kutuya dusseydi, kutuya erisen herkes baskasinin hesabina girebilirdi.
+//	sayilmamali. Musteri (madde 2.2) sitenin gonderdigi mailleri orada gormek istiyor:
+//	aktivasyon maili, ortak-host daveti ve depolama uyarisi bunu kullanir. Parola
+//	sifirlama icin bkz. SendAndKeepRedactedCopy.
 func (m *Mail_serv) SendAndKeepCopy(
 	to []string,
 	subject string,
 	write_f func(io.WriteCloser),
 	extra_headers map[string]string,
 ) error {
-	raw, err := m.send(to, subject, write_f, extra_headers)
+	raw, err := m.send(to, subject, write_f, extra_headers, m.new_message_ids())
 	if err != nil {
 		return err
 	}
 
+	m.keep_copy(to, raw)
+	return nil
+}
+
+// Ne: Send gibi gonderir; Gonderilenler'e konan kopyanin govdesi copy_f'ten gelir.
+// Nasil: Kopya gonderilenle ayni To, Subject, Date ve Message-ID basliklarini tasir; yalnizca
+//
+//	govde farkli (ornegin parola sifirlama linki cikarilmis hali).
+//
+// Neden: Parola sifirlama maili de kutuda gorunsun (destek "mail gitti mi" diye bakabilsin),
+//
+//	ama linkin kendisi kutuya dusmesin: kutuya erisen herkes baskasinin hesabina girebilirdi.
+func (m *Mail_serv) SendAndKeepRedactedCopy(
+	to []string,
+	subject string,
+	write_f func(io.WriteCloser),
+	copy_f func(io.WriteCloser),
+	extra_headers map[string]string,
+) error {
+	ids := m.new_message_ids()
+	if _, err := m.send(to, subject, write_f, extra_headers, ids); err != nil {
+		return err
+	}
+
+	var copyBody bytes.Buffer
+	copy_f(nopWriteCloser{Writer: &copyBody})
+	m.keep_copy(to, m.build_message(to, subject, copyBody.Bytes(), extra_headers, ids))
+	return nil
+}
+
+func (m *Mail_serv) keep_copy(to []string, raw []byte) {
 	go func() {
 		if err := m.save_sent_copy(raw); err != nil {
 			fmt.Printf("[email] WARN: sent copy not saved to=%v err=%v\n", to, err)
@@ -99,8 +131,19 @@ func (m *Mail_serv) SendAndKeepCopy(
 		}
 		fmt.Printf("[email] sent copy saved to=%v\n", to)
 	}()
+}
 
-	return nil
+// Date ve Message-ID bir kez uretilir; Gonderilenler'deki kopya gonderilenle ayni kimligi tasir.
+type message_ids struct {
+	date       string
+	message_id string
+}
+
+func (m *Mail_serv) new_message_ids() message_ids {
+	return message_ids{
+		date:       time.Now().Format(time.RFC1123Z),
+		message_id: fmt.Sprintf("<%s@%s>", random_token(16), m.sender_domain()),
+	}
 }
 
 // Gonderir ve SMTP'ye yazilan ham mesaji dondurur.
@@ -109,6 +152,7 @@ func (m *Mail_serv) send(
 	subject string,
 	write_f func(io.WriteCloser),
 	extra_headers map[string]string,
+	ids message_ids,
 ) (raw []byte, err error) {
 	fmt.Printf("[email] sending to=%v subject=%q\n", to, subject)
 
@@ -147,7 +191,7 @@ func (m *Mail_serv) send(
 		return nil, utils.Tag_err("se4", err)
 	}
 
-	raw = m.build_message(to, subject, htmlBody.Bytes(), extra_headers)
+	raw = m.build_message(to, subject, htmlBody.Bytes(), extra_headers, ids)
 	if _, err = w.Write(raw); err != nil {
 		fmt.Printf("[email] ERROR: write message failed to=%v err=%v\n", to, err)
 		w.Close()
@@ -177,6 +221,7 @@ func (m *Mail_serv) build_message(
 	subject string,
 	htmlBody []byte,
 	extra_headers map[string]string,
+	ids message_ids,
 ) []byte {
 	boundary := random_token(24)
 
@@ -184,8 +229,8 @@ func (m *Mail_serv) build_message(
 	write_mail_header(&msg, "To", strings.Join(to, ", "))
 	write_mail_header(&msg, "From", fmt.Sprintf("%s <%s>", encode_header(m.Display_name), m.Username))
 	write_mail_header(&msg, "Subject", encode_header(subject))
-	write_mail_header(&msg, "Date", time.Now().Format(time.RFC1123Z))
-	write_mail_header(&msg, "Message-ID", fmt.Sprintf("<%s@%s>", random_token(16), m.sender_domain()))
+	write_mail_header(&msg, "Date", ids.date)
+	write_mail_header(&msg, "Message-ID", ids.message_id)
 	write_mail_header(&msg, "MIME-Version", "1.0")
 	write_mail_header(&msg, "Content-Type", `multipart/alternative; boundary="`+boundary+`"`)
 

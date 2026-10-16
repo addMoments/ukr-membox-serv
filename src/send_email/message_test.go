@@ -24,7 +24,7 @@ func buildSample() []byte {
 		Button(link, "Set Up My Account"),
 		"If the button doesn't work, copy and paste this link into your browser:<br>" + link,
 	})
-	return m.build_message([]string{"buyer@example.com"}, "Add Moments Payment Confirmation", body.Bytes(), nil)
+	return m.build_message([]string{"buyer@example.com"}, "Add Moments Payment Confirmation", body.Bytes(), nil, m.new_message_ids())
 }
 
 func TestMessageParsesAndCarriesRequiredHeaders(t *testing.T) {
@@ -119,4 +119,69 @@ func keys(m map[string]string) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// Parola sifirlama: Gonderilenler'deki kopya gonderilenle ayni kimligi (Date, Message-ID) tasir,
+// ama govdesinde sifirlama linki yoktur (SendAndKeepRedactedCopy ikisini de ayni ids ile kurar).
+func TestRedactedCopyKeepsIdentityButDropsLink(t *testing.T) {
+	m := &Mail_serv{Outgoing_server: "mail.addmoments.com.ua", Username: "noreply@addmoments.com.ua", Display_name: "Add Moments"}
+	link := "https://addmoments.com.ua/reset-password/SECRET123"
+	var sentBody, copyBody bytes.Buffer
+	Write_html(&sentBody, "Reset your password", []string{Button(link, "Reset Password"), "If the button doesn't work:<br>" + link})
+	Write_html(&copyBody, "Reset your password", []string{"[the reset link is removed from this copy]"})
+
+	ids := m.new_message_ids()
+	to := []string{"user@example.com"}
+	sent := m.build_message(to, "Reset your Add Moments password", sentBody.Bytes(), nil, ids)
+	kept := m.build_message(to, "Reset your Add Moments password", copyBody.Bytes(), nil, ids)
+
+	sentMsg, err := mail.ReadMessage(bytes.NewReader(sent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keptMsg, err := mail.ReadMessage(bytes.NewReader(kept))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{"Date", "Message-ID", "To", "Subject", "From"} {
+		if sentMsg.Header.Get(h) != keptMsg.Header.Get(h) {
+			t.Errorf("%s farkli: %q != %q", h, sentMsg.Header.Get(h), keptMsg.Header.Get(h))
+		}
+	}
+	decoded := decodeAllParts(t, kept)
+	if strings.Contains(decoded, "SECRET123") {
+		t.Errorf("kopyada sifirlama linki kalmis")
+	}
+	if !strings.Contains(decodeAllParts(t, sent), "SECRET123") {
+		t.Errorf("gonderilen mesajda link yok")
+	}
+	if m.new_message_ids().message_id == ids.message_id {
+		t.Errorf("her gonderim yeni bir Message-ID almali")
+	}
+}
+
+func decodeAllParts(t *testing.T, raw []byte) string {
+	t.Helper()
+	msg, err := mail.ReadMessage(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mr := multipart.NewReader(msg.Body, params["boundary"])
+	var out strings.Builder
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(base64.NewDecoder(base64.StdEncoding, part))
+		out.Write(b)
+	}
+	return out.String()
 }
