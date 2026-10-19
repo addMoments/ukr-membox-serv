@@ -261,6 +261,24 @@ func AuthMiddleware(next http.HandlerFunc, role string) http.HandlerFunc {
 				return
 			}
 
+			// Ne: Token'daki participant bu event'e ait degilse 401 doner.
+			// Nasil: core.ts 401'de saklanan token'i silip istegi tokensiz tekrarlar; serv o
+			//        event icin yeni participant ve token uretir.
+			// Neden: Baska event'in token'i kabul edildiginde paylasimlar o event'in
+			//        participant'ina yaziliyordu (client_uid bir event'te, event_uid baskasinda);
+			//        asagidaki "ev" yenilemesi de bu yanlis eslesmeyi kalici hale getiriyordu.
+			inEvent := false
+			inEvent, err = dbscripts.Participant_in_event(claims.UserUID, eventUID)
+			if err != nil {
+				err = utils.Tag_err("gu4.05", err)
+				return
+			}
+			if !inEvent {
+				err = errors.New("guest token belongs to another event")
+				stat_code = http.StatusUnauthorized
+				return
+			}
+
 			// Ne: Albumlerden onceki misafir token'larinda "ev" claim'i yok; PostgREST
 			//     RLS'i bu claim'e bakarak album gosterdigi icin token yenilenir.
 			// Nasil: Ayni participant UID ile yeni token basilir, X-Auth-Token ile doner;

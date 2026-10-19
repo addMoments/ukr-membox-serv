@@ -159,6 +159,21 @@ func Event_contributor_count(eventUID string) (count int, err error) {
 	return
 }
 
+// Participant_in_event, participant kaydinin bu event'e ait olup olmadigini doner.
+func Participant_in_event(participantUID string, eventUID string) (inEvent bool, err error) {
+	sb := sqlbuilder.NewSelectBuilder()
+	sb.Select("COUNT(*)").From("participants")
+	sb.Where(sb.Equal("uid", participantUID), sb.Equal("event_uid", eventUID))
+
+	res, err := db.Query_one(sb)
+	if err != nil {
+		return
+	}
+
+	inEvent = string(res[0]) != "0"
+	return
+}
+
 // Has_contributed, ilgili katilimcinin bu eventte silinmemis en az bir
 // paylasimi olup olmadigini doner.
 func Has_contributed(eventUID string, clientUID string) (hasContributed bool, err error) {
