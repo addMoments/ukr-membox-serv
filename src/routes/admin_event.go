@@ -345,6 +345,13 @@ func (a admin_event_routes_typ) DeletePermanently(w http.ResponseWriter, r *http
 	defer tx.Rollback()
 
 	counts := types.Js_object{}
+	moved, err := adoptForeignUploads(r, tx, eventUID)
+	if err != nil {
+		http.Error(w, utils.Tag_err("aep6.adopt", err).Error(), http.StatusInternalServerError)
+		return
+	}
+	counts["moved_uploads"] = moved
+
 	steps := []struct {
 		label string
 		query string
@@ -378,6 +385,87 @@ func (a admin_event_routes_typ) DeletePermanently(w http.ResponseWriter, r *http
 	fmt.Printf("[admin.event] permanently deleted event=%s name=%q actor=%s counts=%v\n", eventUID, name, claims.UserUID, counts)
 
 	networkutils.SendJson(types.Js_object{"success": true, "removed": counts}, w)
+}
+
+// adoptForeignUploads, silinen event'in participant'larina bagli ama BASKA event'e ait
+// paylasimlari o event'teki bir participant'a tasir; tasinan satir sayisini doner.
+// Nasil: Her (participant, hedef event) cifti icin hedef UID auth.DerivedParticipantUID ile
+//
+//	turetilir; participant UID'i hesap UID'iyle ayni olan eski kayitlarda bu, sahibi o
+//	event'e girdiginde resolveAuthParticipantUID'in bulacagi kayittir. Kayit yoksa eski
+//	isimle (o event'te alinmissa "guest-" onekli otomatik isimle) olusturulur, sonra
+//	paylasimlarin client_uid'i ona cevrilir. Dosyalar zaten hedef event'in S3 klasorunde.
+//
+// Neden: 21 Agustos (444fada) oncesinde giris yapmis hesap tek bir participant kaydina
+//
+//	bagliydi; baska event'te paylasim yapinca satir o kayda yaziliyordu. Bu satirlar
+//	uploads_client_uid_fkey yuzunden kalici silmeyi durduruyordu (19 Ekim, "3 people" ve
+//	"OLENA BM PARTY"). Silmek baska bir event'in iceriginden veri kaybi olurdu.
+func adoptForeignUploads(r *http.Request, tx *sql.Tx, eventUID string) (int64, error) {
+	rows, err := tx.QueryContext(r.Context(), `
+		SELECT DISTINCT p.uid, p.name, u.event_uid
+		FROM uploads u
+		JOIN participants p ON p.uid = u.client_uid
+		WHERE p.event_uid = $1 AND u.event_uid <> $1
+	`, eventUID)
+	if err != nil {
+		return 0, err
+	}
+	type pair struct{ participantUID, name, targetEventUID string }
+	var pairs []pair
+	for rows.Next() {
+		var p pair
+		if err := rows.Scan(&p.participantUID, &p.name, &p.targetEventUID); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		pairs = append(pairs, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	var moved int64
+	for _, p := range pairs {
+		targetUID := auth.DerivedParticipantUID(p.participantUID, p.targetEventUID)
+		packedTarget, err := utils.UUID.PackUUID(targetUID)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(r.Context(), `
+			INSERT INTO participants (uid, name, event_uid)
+			SELECT $1::uuid,
+			       CASE WHEN EXISTS (SELECT 1 FROM participants WHERE event_uid = $3::uuid AND name = $2::varchar)
+			            THEN 'guest-' || $4::text ELSE $2::varchar END,
+			       $3::uuid
+			ON CONFLICT DO NOTHING
+		`, targetUID, p.name, p.targetEventUID, packedTarget); err != nil {
+			return 0, err
+		}
+		// ON CONFLICT bir isim cakismasini da yutabilir; hedef kayit gercekten yoksa
+		// transaction geri alinir ve hicbir sey silinmez.
+		var ok bool
+		if err := tx.QueryRowContext(r.Context(), `
+			SELECT EXISTS (SELECT 1 FROM participants WHERE uid = $1 AND event_uid = $2)
+		`, targetUID, p.targetEventUID).Scan(&ok); err != nil {
+			return 0, err
+		}
+		if !ok {
+			return 0, fmt.Errorf("could not create participant %s in event %s", targetUID, p.targetEventUID)
+		}
+		res, err := tx.ExecContext(r.Context(), `
+			UPDATE uploads SET client_uid = $1 WHERE client_uid = $2 AND event_uid = $3
+		`, targetUID, p.participantUID, p.targetEventUID)
+		if err != nil {
+			return 0, err
+		}
+		n, _ := res.RowsAffected()
+		moved += n
+		fmt.Printf("[admin.event] permanent delete moved %d uploads of participant=%s (%q) to participant=%s in event=%s\n",
+			n, p.participantUID, p.name, targetUID, p.targetEventUID)
+	}
+	return moved, nil
 }
 
 // Panelden gelen tarih ya sade gun (date input) ya da tam zaman damgasi olabilir.

@@ -57,6 +57,13 @@ func logGuestMetrics(eventUID string, source string) {
 // eski paylasimlariyla baglari kopar.
 var participantNamespace = uuid.Must(uuid.Parse("b7c9e4f2-3a1d-4e88-9c05-6d2f8a3b5e71"))
 
+// DerivedParticipantUID, (userUID, eventUID) ciftinin deterministik participant UID'idir.
+// Kalici silme de bunu kullanir: baska event'e dusmus paylasimlar, sahibi o event'e
+// girdiginde resolveAuthParticipantUID'in bulacagi kayda tasinir.
+func DerivedParticipantUID(userUID string, eventUID string) string {
+	return uuid.NewSHA1(participantNamespace, []byte(userUID+":"+eventUID)).String()
+}
+
 // resolveAuthParticipantUID, giris yapmis kullanicinin bu event'e ozel participant kaydini
 // bulur, yoksa olusturur.
 // Nasil: (userUID, eventUID) ciftinden deterministik bir UUIDv5 turetir. Bu event'te legacy
@@ -65,7 +72,7 @@ var participantNamespace = uuid.Must(uuid.Parse("b7c9e4f2-3a1d-4e88-9c05-6d2f8a3
 // event'e baglanabiliyordu; ikinci event'in misafir sayfasinda kayit hic olusmuyor,
 // host galeride ismi goremiyor ve misafir sayimi eksik kaliyordu.
 func resolveAuthParticipantUID(userUID string, eventUID string) (participantUID string, err error) {
-	derivedUID := uuid.NewSHA1(participantNamespace, []byte(userUID+":"+eventUID)).String()
+	derivedUID := DerivedParticipantUID(userUID, eventUID)
 
 	// Legacy ve turev kayit ayni sorguda aranir; legacy oncelikli secilir ki bugune kadar
 	// userUID ile yazilmis kayitlar ve onlara bagli paylasimlar oldugu gibi korunsun.
