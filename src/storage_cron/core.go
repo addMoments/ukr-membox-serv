@@ -1,6 +1,7 @@
 // Package storagecron handles event lifecycle automation:
 //   - T-14 warning mails (host'a "14 gun icinde silinecek" uyarisi)
 //   - T-0  soft-delete (storage_until gectiginde deleted_at doldurulur)
+//   - export zip'lerini 3 gun sonra silme (saatlik, event_cleanup.ExportZipTTL)
 //
 // Tasarim notlari:
 //   - RunOnce idempotent: storage_warning_mail_sent_at ve deleted_at flag'leri
@@ -14,6 +15,7 @@ package storagecron
 
 import (
 	"fmt"
+	eventcleanup "membox-serv/src/event_cleanup"
 	"sync"
 	"time"
 )
@@ -48,6 +50,20 @@ func Init() {
 			if _, err := RunOnce(false); err != nil {
 				fmt.Printf("[storage_cron] tick run error: %v\n", err)
 			}
+		}
+	}()
+
+	// Export zip'leri ExportZipTTL (3 gun) dolunca silinir; saatlik bakilir ki ekranda yazan saatten
+	// en fazla bir saat sonra gitsin.
+	go func() {
+		for {
+			removed, err := eventcleanup.DeleteExpiredExportZips()
+			if err != nil {
+				fmt.Printf("[storage_cron] export zip cleanup error (%d removed): %v\n", removed, err)
+			} else if removed > 0 {
+				fmt.Printf("[storage_cron] removed %d export zip(s) older than %s\n", removed, eventcleanup.ExportZipTTL)
+			}
+			time.Sleep(time.Hour)
 		}
 	}()
 }

@@ -46,6 +46,14 @@ func PurgeUploadsAndSoftDeleteEvent(eventUID string, actorUserUID string, reason
 		return nil, err
 	}
 
+	// Export zip'leri medyanin kopyasi; etkinlik kapaninca onlar da gider. Hata kapatmayi durdurmaz,
+	// silinemeyen zip'i saatlik temizlik ExportZipTTL dolunca toplar.
+	if removed, zipErr := DeleteEventExportZips(eventUID); zipErr != nil {
+		fmt.Printf("[event_cleanup] WARN: export zips of event=%s not fully removed (%d removed): %v\n", eventUID, removed, zipErr)
+	} else if removed > 0 {
+		fmt.Printf("[event_cleanup] removed %d export zip(s) of event=%s\n", removed, eventUID)
+	}
+
 	if err = markPurgeFinished(eventUID); err != nil {
 		return nil, err
 	}

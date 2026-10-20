@@ -8,11 +8,13 @@ import (
 	"log"
 	db "membox-serv/src/db_layer"
 	dbscripts "membox-serv/src/db_scripts"
+	eventcleanup "membox-serv/src/event_cleanup"
 	s3wrap "membox-serv/src/s3-wrap"
 	"membox-serv/src/types"
 	"membox-serv/src/utils"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/s3"
@@ -265,5 +267,14 @@ func Export_s3(input types.Js_object, user_uid string) (output types.Js_object, 
 
 	log.Printf("[export-s3] export completed successfully: %s", s3wrap.Public_s3.Url(exportPath))
 	output["zip_path"] = exportPath
+	// Ekran indirmenin son saatini buradan gosterir; zip'i bu sure dolunca storage_cron siler.
+	output["zip_expires_at"] = time.Now().Add(eventcleanup.ExportZipTTL).UTC().Format(time.RFC3339)
+
+	removed, cleanErr := eventcleanup.DeletePreviousExportZips(user_uid, event_uid, albumUID)
+	if cleanErr != nil {
+		log.Printf("[export-s3] previous export zips not fully removed (%d removed): %v", removed, cleanErr)
+	} else if removed > 0 {
+		log.Printf("[export-s3] removed %d previous export zip(s)", removed)
+	}
 	return
 }

@@ -272,6 +272,42 @@ func (sr S3_serv) Ls_all(prefix string) ([]string, error) {
 	return keys, nil
 }
 
+type S3_object_info struct {
+	Key          string
+	Size         int64
+	LastModified time.Time
+}
+
+// Ls_all_info, Ls_all ile ayni sekilde sayfa sayfa listeler; anahtarin yaninda boyut ve son
+// degisiklik zamanini da dondurur (export zip'lerinin yasini olcmek icin).
+func (sr S3_serv) Ls_all_info(prefix string) ([]S3_object_info, error) {
+	if !sr.Is_init {
+		return nil, fmt.Errorf("s3 is not init")
+	}
+
+	objects := make([]S3_object_info, 0)
+	err := sr.Serv.ListObjectsPages(&s3.ListObjectsInput{
+		Bucket: aws.String(sr.Inf.Bucket),
+		Prefix: aws.String(prefix),
+	}, func(page *s3.ListObjectsOutput, lastPage bool) bool {
+		for _, obj := range page.Contents {
+			if obj.Key == nil {
+				continue
+			}
+			objects = append(objects, S3_object_info{
+				Key:          *obj.Key,
+				Size:         aws.Int64Value(obj.Size),
+				LastModified: aws.TimeValue(obj.LastModified),
+			})
+		}
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	return objects, nil
+}
+
 // Exists, verilen key'in bucket icinde var olup olmadigini kontrol eder.
 func (sr S3_serv) Exists(path string) (bool, error) {
 	if !sr.Is_init {
