@@ -248,11 +248,15 @@ func (ur upgrade_routes_typ) Purchase(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// upgradeReturnURL, yukseltme odemesinden sonra hostun dondugu sayfa.
-func upgradeReturnURL(eventUID string) string {
+// upgradeReturnURL, yukseltme odemesinden sonra hostun dondugu etkinlik sayfasi; done ise
+// sayfa "yukseltme tamamlandi" bildirimini gosterir (?upgrade=done).
+func upgradeReturnURL(eventUID string, done bool) string {
 	packed, err := utils.UUID.PackUUID(eventUID)
 	if err != nil {
 		return "/events"
+	}
+	if !done {
+		return "/event/" + packed
 	}
 	return "/event/" + packed + "?upgrade=done"
 }

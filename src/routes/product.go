@@ -1228,8 +1228,13 @@ func (rfrnc product_routes_typ) PurchaseStatus(w http.ResponseWriter, r *http.Re
 
 	// Payment was recorded as failed
 	if strings.HasPrefix(providerID, "failed:") {
+		failed := map[string]string{"status": "failed"}
+		// Yukseltme odemesi (Excel 2.18) etkinlik sayfasindan tekrar denenir.
+		if upgradeEventUID, _, stateErr := dbscripts.Purchase_upgrade_state(purchaseUID); stateErr == nil && upgradeEventUID != "" {
+			failed["return_url"] = upgradeReturnURL(upgradeEventUID, false)
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "failed"})
+		json.NewEncoder(w).Encode(failed)
 		return
 	}
 
@@ -1242,7 +1247,7 @@ func (rfrnc product_routes_typ) PurchaseStatus(w http.ResponseWriter, r *http.Re
 			"upgrade":    true,
 			"applied":    appliedAt != "",
 			"event":      packedEventUID,
-			"return_url": upgradeReturnURL(upgradeEventUID),
+			"return_url": upgradeReturnURL(upgradeEventUID, true),
 		})
 		return
 	}

@@ -103,7 +103,7 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 	upgradeEventUID := string(res[5])
 	if providerID != "" && upgradeEventUID != "" {
 		// Yukseltme zaten islendi; tarayici etkinlik sayfasina doner.
-		redr_url = upgradeReturnURL(upgradeEventUID)
+		redr_url = upgradeReturnURL(upgradeEventUID, true)
 		return
 	}
 	if providerID != "" {
@@ -221,7 +221,7 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 			return
 		}
 		fmt.Printf("[upgrade.apply] purchase=%s event=%s applied\n", purchaseUID, upgradeEventUID)
-		redr_url = upgradeReturnURL(upgradeEventUID)
+		redr_url = upgradeReturnURL(upgradeEventUID, true)
 		return
 	}
 
