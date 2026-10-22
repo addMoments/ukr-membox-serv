@@ -126,7 +126,8 @@ SELECT
         ('albums_guest_select', 'uploads_guest_album_select', 'participants_guest_album_select')
         AND qual NOT LIKE '%guest_gallery%')                                           AS policies_without_gallery;
 -- visible_in_gallery_off_events = 0, policies_without_gallery = 3 olmali;
--- albums_view_turned_off, check adimindaki "albums_to_turn_off" ile ayni olmali.
+-- albums_view_turned_off >= check adimindaki "albums_to_turn_off": UPDATE silinmis albumleri de
+-- kapsar (zararsiz), check onlari saymaz. Fark yalnizca silinmis album sayisi kadar olabilir.
 
 COMMIT;
 
