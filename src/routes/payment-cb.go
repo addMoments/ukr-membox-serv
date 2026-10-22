@@ -101,6 +101,14 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 	promoCodeUID := string(res[4])
 	// Bos degilse bu bir yukseltme siparisi (Excel 2.18): mevcut etkinlige bagli, kayit linki yok.
 	upgradeEventUID := string(res[5])
+	// Odeme basarisiz kaydedildiyse tarayici bekleme sayfasina gider; o sayfa basarisizligi
+	// gosterir (yukseltmede etkinlige donus linkiyle). Eskiden asagidaki dal burada da
+	// "Payment Successful" ve kayit linki veriyordu (2026-10-22).
+	if strings.HasPrefix(providerID, "failed:") {
+		fmt.Println("pcb | payment already recorded as failed, sending to the pending page")
+		redr_url = "/checkout/pending/" + pt.ReferenceNo
+		return
+	}
 	if providerID != "" && upgradeEventUID != "" {
 		// Yukseltme zaten islendi; tarayici etkinlik sayfasina doner.
 		redr_url = upgradeReturnURL(upgradeEventUID, true)

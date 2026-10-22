@@ -430,14 +430,31 @@ func validateSignupToken(encToken string) (pt payments.PaymentToken, ownerEmail 
 		return pt, "", errors.New("invalid token: owner email missing")
 	}
 
+	// "m:" linki siparisteki paketle "paid" bir etkinlik acar; siparisin odemesi LiqPay'in
+	// imzali bildirimiyle dogrulanmis olmali (provider_id dolu ve "failed:" degil). Link ureten
+	// yollar (Payment_cb, PurchaseStatus, admin "resend") bunu zaten bekliyor; bu kontrol elde
+	// kalmis ya da baska yoldan uretilmis link icin. 2026-10-22'ye kadar odeme donus adresine
+	// tarayicidan girmek odenmemis ya da basarisiz siparise link veriyordu.
 	// Yukseltme siparisi (Excel 2.18) mevcut bir etkinlige baglidir; ondan yeni etkinlik acilmaz.
-	// Payment_cb ve PurchaseStatus bu siparislere link uretmiyor; bu kontrol elde kalmis ya da
-	// baska yoldan uretilmis bir link icin.
 	if prefix == "m" {
-		if purchaseUID, unpackErr := utils.UUID.UnpackUUID(pt.ReferenceNo); unpackErr == nil {
-			if upgradeEventUID, _, stateErr := dbscripts.Purchase_upgrade_state(purchaseUID); stateErr == nil && upgradeEventUID != "" {
-				return pt, "", errors.New("invalid token: this order upgrades an existing event")
-			}
+		purchaseUID, unpackErr := utils.UUID.UnpackUUID(pt.ReferenceNo)
+		if unpackErr != nil {
+			return pt, "", errors.New("invalid token: order reference invalid")
+		}
+		sb := sqlbuilder.NewSelectBuilder()
+		sb.Select("COALESCE(provider_id, '')", "COALESCE(event_uid::text, '')").From("purchases").Where(
+			sb.Equal("uid", purchaseUID),
+		)
+		res, queryErr := db.Query_one(sb)
+		if queryErr != nil {
+			return pt, "", errors.New("invalid token: order not found")
+		}
+		providerID := string(res[0])
+		if providerID == "" || strings.HasPrefix(providerID, "failed:") {
+			return pt, "", errors.New("invalid token: payment not confirmed")
+		}
+		if string(res[1]) != "" {
+			return pt, "", errors.New("invalid token: this order upgrades an existing event")
 		}
 	}
 
