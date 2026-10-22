@@ -432,7 +432,9 @@ func (rfrnc product_routes_typ) GetProducts(w http.ResponseWriter, r *http.Reque
 	sb := sqlbuilder.NewSelectBuilder()
 	sb.Select(keys...)
 	sb.From("products")
-	sb.Where(sb.GreaterThan("priority", 0), sb.Equal("is_enabled", true))
+	// Yukseltme urunleri (Excel 2.18) yalnizca etkinlik sayfasindan satilir; admin onlara
+	// priority verse bile Services & Prices'ta gorunmezler.
+	sb.Where(sb.GreaterThan("priority", 0), sb.Equal("is_enabled", true), "options->>'upgrade_kind' IS NULL")
 	sb.OrderByDesc("priority")
 
 	res, err := db_layer.Query_all(sb)
@@ -1031,6 +1033,40 @@ func (rfrnc product_routes_typ) AdminUpdateProduct(w http.ResponseWriter, r *htt
 		optionsChanged = true
 	}
 
+	// Yukseltme urunleri (Excel 2.18): ek GB ve ek ay admin panelinden degisir. Yalnizca ayni
+	// turdeki yukseltme urununde kabul edilir; baska bir urune yazilsa limit hesabina karismaz
+	// ama yaniltici olur.
+	upgradeKind, _ := options["upgrade_kind"].(string)
+	for _, f := range []struct {
+		field string
+		kind  string
+	}{
+		{"extra_storage_gb", "storage"},
+		{"extra_storage_months", "time"},
+	} {
+		value, has, parseErr := getFirstIntField(req, f.field)
+		if !has {
+			continue
+		}
+		if parseErr != nil {
+			stat_code = 400
+			err = parseErr
+			return
+		}
+		if upgradeKind != f.kind {
+			stat_code = 400
+			err = errors.New(f.field + " can only be set on a " + f.kind + " upgrade product")
+			return
+		}
+		if value <= 0 {
+			stat_code = 400
+			err = errors.New(f.field + " must be > 0")
+			return
+		}
+		options[f.field] = value
+		optionsChanged = true
+	}
+
 	if optionsChanged {
 		assignments = append(assignments, ub.Assign("options", options.Json()))
 	}
@@ -1197,6 +1233,20 @@ func (rfrnc product_routes_typ) PurchaseStatus(w http.ResponseWriter, r *http.Re
 		return
 	}
 
+	// Yukseltme siparisi (Excel 2.18): kayit linki yok; bekleme sayfasi hostu etkinlige yollar.
+	if upgradeEventUID, appliedAt, stateErr := dbscripts.Purchase_upgrade_state(purchaseUID); stateErr == nil && upgradeEventUID != "" {
+		packedEventUID, _ := utils.UUID.PackUUID(upgradeEventUID)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(types.Js_object{
+			"status":     "success",
+			"upgrade":    true,
+			"applied":    appliedAt != "",
+			"event":      packedEventUID,
+			"return_url": upgradeReturnURL(upgradeEventUID),
+		})
+		return
+	}
+
 	// Build signup token same way as payment-cb.go
 	purchaseInfo := types.Js_object{}
 	if err := json.Unmarshal(res[1], &purchaseInfo); err != nil {
@@ -1272,6 +1322,23 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 	}
 
 	fmt.Println("provider found: ", provider.Name, provider, req)
+
+	// Yukseltme urunleri (Excel 2.18) mevcut bir etkinlige baglanir; burada alinsalar odeme
+	// sonrasi yeni, paketsiz bir etkinlik acilirdi. Yalnizca /api/event/{uid}/upgrade satar.
+	requestedIDs := []string{}
+	for productID := range req.Purchase_info {
+		requestedIDs = append(requestedIDs, productID)
+	}
+	upgradeIDs, err := dbscripts.Upgrade_product_ids(requestedIDs)
+	if err != nil {
+		err = utils.Tag_err("mce2u", err)
+		return
+	}
+	if len(upgradeIDs) > 0 {
+		stat_code = http.StatusBadRequest
+		err = errors.New("upgrade products can only be bought from the event page: " + strings.Join(upgradeIDs, ", "))
+		return
+	}
 
 	lang := "en"
 	AcceptLanguage := r.Header.Get("Accept-Language")

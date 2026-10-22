@@ -19,7 +19,8 @@ type features_routes_typ struct{}
 var FeaturesRoute features_routes_typ
 
 // eventFeatures queries the union of all granted_features integers across all
-// products in the event's purchase cart.
+// products in the event's purchase cart and the package the event was upgraded to
+// (event_core_product_uid; Has_feature ile ayni kural).
 func eventFeatures(eventUID string) (featureIDs []int, err error) {
 	bldr := sqlbuilder.BuildNamed(`
 		SELECT DISTINCT unnest(p.granted_features) AS feature_id
@@ -27,6 +28,12 @@ func eventFeatures(eventUID string) (featureIDs []int, err error) {
 		INNER JOIN purchases pu ON e.purchase_uid = pu.uid
 		INNER JOIN cart_items ci ON pu.cart_uid = ci.cart_uid
 		INNER JOIN products p ON ci.product_uid = p.uid
+		WHERE e.uid = ${event_uid}
+		  AND e.deleted_at IS NULL
+		UNION
+		SELECT unnest(p.granted_features)
+		FROM events e
+		INNER JOIN products p ON p.uid = event_core_product_uid(e.uid)
 		WHERE e.uid = ${event_uid}
 		  AND e.deleted_at IS NULL
 	`, map[string]interface{}{

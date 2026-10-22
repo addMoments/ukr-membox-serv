@@ -46,19 +46,18 @@ var ErrGuestStorageLimitReached = errors.New("guest storage limit reached")
 
 const bytesPerGB = 1024 * 1024 * 1024
 
-// Event_option_number, core paketin options alanindaki sayisal bir secenegi okur.
+// Event_option_number, etkinligin gecerli core paketinin (yukseltme dahil,
+// event_core_product_uid) options alanindaki sayisal bir secenegi okur.
 // Anahtar yoksa, bos ya da sayiya cevrilemiyorsa "tanimsiz" doner; cagiran taraf
 // bunu sinirsiz olarak yorumlar. Boylece eski paketlerde yeni anahtarlar hata uretmez.
+// storage_gb sinirliysa satin alinmis ek GB (event_extra_storage_gb) eklenir.
 func Event_option_number(eventUID string, key string) (value float64, defined bool, err error) {
 	sb := sqlbuilder.NewSelectBuilder()
-	sb.Select("p.options->>" + sb.Var(key)).From("events e")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "purchases pu", "e.purchase_uid = pu.uid")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "cart_items ci", "pu.cart_uid = ci.cart_uid")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "products p", "ci.product_uid = p.uid")
+	sb.Select("p.options->>"+sb.Var(key), "event_extra_storage_gb(e.uid)").From("events e")
+	sb.JoinWithOption(sqlbuilder.InnerJoin, "products p", "p.uid = event_core_product_uid(e.uid)")
 	sb.Where(
 		sb.Equal("e.uid", eventUID),
 		sb.IsNull("e.deleted_at"),
-		sb.Equal("p.is_add_on", false),
 	)
 
 	rows, err := db.Query_all(sb)
@@ -78,6 +77,10 @@ func Event_option_number(eventUID string, key string) (value float64, defined bo
 	value, parseErr := strconv.ParseFloat(raw, 64)
 	if parseErr != nil {
 		return 0, false, nil
+	}
+	if key == "storage_gb" && value >= 0 {
+		extraGB, _ := strconv.ParseFloat(strings.TrimSpace(string(rows[0][1])), 64)
+		value += extraGB
 	}
 	return value, true, nil
 }

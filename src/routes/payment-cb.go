@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	db "membox-serv/src/db_layer"
+	dbscripts "membox-serv/src/db_scripts"
 	"membox-serv/src/env"
 	"membox-serv/src/mycrypto"
 	"membox-serv/src/payments"
@@ -81,7 +82,7 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 	}
 
 	sb := sqlbuilder.NewSelectBuilder()
-	sb.Select("buyer_uid", "purchase_info", "cart_uid", "provider_id", "promo_code_uid").From("purchases").Where(
+	sb.Select("buyer_uid", "purchase_info", "cart_uid", "provider_id", "promo_code_uid", "COALESCE(event_uid::text, '')").From("purchases").Where(
 		sb.Equal("uid", purchaseUID),
 	)
 	res, err := db.Query_one(sb)
@@ -98,6 +99,13 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 
 	providerID := string(res[3])
 	promoCodeUID := string(res[4])
+	// Bos degilse bu bir yukseltme siparisi (Excel 2.18): mevcut etkinlige bagli, kayit linki yok.
+	upgradeEventUID := string(res[5])
+	if providerID != "" && upgradeEventUID != "" {
+		// Yukseltme zaten islendi; tarayici etkinlik sayfasina doner.
+		redr_url = upgradeReturnURL(upgradeEventUID)
+		return
+	}
 	if providerID != "" {
 		// Already processed by a previous callback — skip DB writes but still
 		// redirect the browser to the notice page (handles browser GET arriving after server POST)
@@ -201,6 +209,20 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 			err = utils.Tag_err("pcb4p", promoErr)
 			return
 		}
+	}
+
+	// Yukseltme siparisi: odeme dogrulandi (provider_id yukarida yazildi). Sepet, etkinlik
+	// tarihleri ve upgrade_applied_at tek transaction'da apply_event_upgrade ile yazilir.
+	// Hata olursa odeme kayitli kalir; admin siparis ekranindan yeniden uygulanir.
+	if upgradeEventUID != "" {
+		if _, applyErr := dbscripts.Apply_event_upgrade(purchaseUID); applyErr != nil {
+			fmt.Printf("[upgrade.apply] ERROR: purchase=%s event=%s err=%v\n", purchaseUID, upgradeEventUID, applyErr)
+			err = utils.Tag_err("pcbu1", applyErr)
+			return
+		}
+		fmt.Printf("[upgrade.apply] purchase=%s event=%s applied\n", purchaseUID, upgradeEventUID)
+		redr_url = upgradeReturnURL(upgradeEventUID)
+		return
 	}
 
 	cartUID := string(res[2])

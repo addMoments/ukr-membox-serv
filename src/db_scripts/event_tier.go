@@ -8,21 +8,28 @@ import (
 	"github.com/huandu/go-sqlbuilder"
 )
 
-// Has_feature returns true if any product in the event's purchase cart
-// has featureID in its granted_features array.
+// Has_feature returns true if any product in the event's purchase cart, or the
+// package the event was upgraded to (event_core_product_uid), has featureID in its
+// granted_features array. Bir Classic etkinlik Premium'a gecince reklam alani acilir.
 func Has_feature(eventUID string, featureID int) (has bool, err error) {
-	sb := sqlbuilder.NewSelectBuilder()
-	sb.Select("COUNT(*)").From("events e")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "purchases pu", "e.purchase_uid = pu.uid")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "cart_items ci", "pu.cart_uid = ci.cart_uid")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "products p", "ci.product_uid = p.uid")
-	sb.Where(
-		sb.Equal("e.uid", eventUID),
-		sb.IsNull("e.deleted_at"),
-		sb.Var(featureID)+" = ANY(p.granted_features)",
-	)
+	bldr := sqlbuilder.BuildNamed(`
+		SELECT COUNT(*) FROM events e
+		WHERE e.uid = ${event_uid}
+		  AND e.deleted_at IS NULL
+		  AND (
+		        EXISTS (SELECT 1
+		                  FROM purchases pu
+		                  JOIN cart_items ci ON pu.cart_uid = ci.cart_uid
+		                  JOIN products p    ON ci.product_uid = p.uid
+		                 WHERE pu.uid = e.purchase_uid
+		                   AND ${feature_id} = ANY(p.granted_features))
+		     OR EXISTS (SELECT 1 FROM products p
+		                 WHERE p.uid = event_core_product_uid(e.uid)
+		                   AND ${feature_id} = ANY(p.granted_features))
+		  )
+	`, map[string]interface{}{"event_uid": eventUID, "feature_id": featureID})
 
-	res, err := db.Query_one(sb)
+	res, err := db.Query_one(bldr)
 	if err != nil {
 		return
 	}
@@ -35,12 +42,11 @@ var ErrLimitReached = errors.New("limit reached")
 var ErrGuestLimitReached = errors.New("guest limit reached")
 var ErrMediaLimitReached = errors.New("media limit reached")
 
+// Event_tier, etkinligin gecerli core paketinin id'si (yukseltme dahil).
 func Event_tier(eventUID string) (tier string, err error) {
 	sb := sqlbuilder.NewSelectBuilder()
 	sb.Select("p.id").From("events e")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "purchases pu", "e.purchase_uid = pu.uid")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "cart_items ci", "pu.cart_uid = ci.cart_uid")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "products p", "ci.product_uid = p.uid")
+	sb.JoinWithOption(sqlbuilder.InnerJoin, "products p", "p.uid = event_core_product_uid(e.uid)")
 	sb.Where(
 		sb.Equal("e.uid", eventUID),
 		sb.IsNull("e.deleted_at"),
@@ -55,16 +61,14 @@ func Event_tier(eventUID string) (tier string, err error) {
 	return
 }
 
+// Event_limit, etkinligin gecerli core paketindeki (yukseltme dahil) tamsayi limiti okur.
 func Event_limit(eventUID string, limitName string) (limit int, err error) {
 	sb := sqlbuilder.NewSelectBuilder()
 	sb.Select("p.options->>" + sb.Var(limitName)).From("events e")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "purchases pu", "e.purchase_uid = pu.uid")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "cart_items ci", "pu.cart_uid = ci.cart_uid")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "products p", "ci.product_uid = p.uid")
+	sb.JoinWithOption(sqlbuilder.InnerJoin, "products p", "p.uid = event_core_product_uid(e.uid)")
 	sb.Where(
 		sb.Equal("e.uid", eventUID),
 		sb.IsNull("e.deleted_at"),
-		sb.Equal("p.is_add_on", false),
 	)
 
 	res, err := db.Query_one(sb)
@@ -82,12 +86,9 @@ func Event_limit(eventUID string, limitName string) (limit int, err error) {
 func Event_limit_including_closed(eventUID string, limitName string) (limit int, err error) {
 	sb := sqlbuilder.NewSelectBuilder()
 	sb.Select("p.options->>" + sb.Var(limitName)).From("events e")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "purchases pu", "e.purchase_uid = pu.uid")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "cart_items ci", "pu.cart_uid = ci.cart_uid")
-	sb.JoinWithOption(sqlbuilder.InnerJoin, "products p", "ci.product_uid = p.uid")
+	sb.JoinWithOption(sqlbuilder.InnerJoin, "products p", "p.uid = event_core_product_uid(e.uid)")
 	sb.Where(
 		sb.Equal("e.uid", eventUID),
-		sb.Equal("p.is_add_on", false),
 	)
 
 	res, err := db.Query_one(sb)

@@ -430,5 +430,16 @@ func validateSignupToken(encToken string) (pt payments.PaymentToken, ownerEmail 
 		return pt, "", errors.New("invalid token: owner email missing")
 	}
 
+	// Yukseltme siparisi (Excel 2.18) mevcut bir etkinlige baglidir; ondan yeni etkinlik acilmaz.
+	// Payment_cb ve PurchaseStatus bu siparislere link uretmiyor; bu kontrol elde kalmis ya da
+	// baska yoldan uretilmis bir link icin.
+	if prefix == "m" {
+		if purchaseUID, unpackErr := utils.UUID.UnpackUUID(pt.ReferenceNo); unpackErr == nil {
+			if upgradeEventUID, _, stateErr := dbscripts.Purchase_upgrade_state(purchaseUID); stateErr == nil && upgradeEventUID != "" {
+				return pt, "", errors.New("invalid token: this order upgrades an existing event")
+			}
+		}
+	}
+
 	return pt, ownerEmail, nil
 }

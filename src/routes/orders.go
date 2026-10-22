@@ -249,7 +249,9 @@ func (o order_routes_typ) ListOrders(w http.ResponseWriter, r *http.Request) {
 			COALESCE(p.discount_amount, 0)::text AS discount_amount,
 			COALESCE(p.net_total, SUM(COALESCE(ci.unit_price_snapshot, pr.price) * ci.quantity))::text AS net_total,
 			COALESCE(p.promo_code_uid::text, '') AS promo_code_uid,
-			COALESCE(p.promo_code_text_snapshot, '') AS promo_code_text_snapshot
+			COALESCE(p.promo_code_text_snapshot, '') AS promo_code_text_snapshot,
+			COALESCE(p.event_uid::text, '') AS upgrade_event_uid,
+			COALESCE(p.upgrade_applied_at::text, '') AS upgrade_applied_at
 		FROM purchases p
 		LEFT JOIN users u ON p.buyer_uid = u.uid
 		LEFT JOIN carts c ON p.cart_uid = c.uid
@@ -281,6 +283,9 @@ func (o order_routes_typ) ListOrders(w http.ResponseWriter, r *http.Request) {
 			"net_total":                string(row[9]),
 			"promo_code_uid":           emptyStringAsNil(row[10]),
 			"promo_code_text_snapshot": emptyStringAsNil(row[11]),
+			// Excel 2.18: bos degilse siparis mevcut bir etkinligin yukseltmesi.
+			"upgrade_event_uid":  emptyStringAsNil(row[12]),
+			"upgrade_applied_at": emptyStringAsNil(row[13]),
 		})
 	}
 
@@ -336,7 +341,11 @@ func (o order_routes_typ) GetOrder(w http.ResponseWriter, r *http.Request) {
 			COALESCE(p.discount_amount::text, '') AS discount_amount,
 			COALESCE(p.net_total::text, '') AS net_total,
 			COALESCE(p.promo_code_uid::text, '') AS promo_code_uid,
-			COALESCE(p.promo_code_text_snapshot, '') AS promo_code_text_snapshot
+			COALESCE(p.promo_code_text_snapshot, '') AS promo_code_text_snapshot,
+			COALESCE(p.event_uid::text, '') AS upgrade_event_uid,
+			COALESCE(p.upgrade_applied_at::text, '') AS upgrade_applied_at,
+			COALESCE(p.provider_id, '') AS provider_id,
+			COALESCE((SELECT e.name FROM events e WHERE e.uid = p.event_uid), '') AS upgrade_event_name
 		FROM purchases p
 		LEFT JOIN users u ON p.buyer_uid = u.uid
 		WHERE p.uid = ${purchase_uid}
@@ -453,6 +462,21 @@ func (o order_routes_typ) GetOrder(w http.ResponseWriter, r *http.Request) {
 		"shipping_address": shippingAddress,
 		"items":            items,
 		"payment_summary":  paymentSummary,
+	}
+
+	// Excel 2.18: yukseltme siparisinin kendi etkinligi yok; bagli oldugu etkinligi ve
+	// uygulanip uygulanmadigini gosterir. Odenmis ama uygulanmamissa panel "yeniden uygula" sunar.
+	if upgradeEventUID := string(purchaseRow[11]); upgradeEventUID != "" {
+		providerID := string(purchaseRow[13])
+		paid := providerID != "" && !strings.HasPrefix(providerID, "failed:")
+		packedEventUID, _ := utils.UUID.PackUUID(upgradeEventUID)
+		order["upgrade"] = types.Js_object{
+			"event_uid":        upgradeEventUID,
+			"event_packed_uid": packedEventUID,
+			"event_name":       string(purchaseRow[14]),
+			"paid":             paid,
+			"applied_at":       emptyStringAsNil(purchaseRow[12]),
+		}
 	}
 
 	orderAccount, err := buildOrderAccountPayload(purchaseUID)
@@ -810,10 +834,16 @@ type activationLinkState struct {
 // "Resend is available although there is no purchase".
 func activationLinkFor(purchaseUID string) activationLinkState {
 	sb := sqlbuilder.NewSelectBuilder()
-	sb.Select("COALESCE(provider_id, '')", "purchase_info").From("purchases").Where(sb.Equal("uid", purchaseUID))
+	sb.Select("COALESCE(provider_id, '')", "purchase_info", "COALESCE(event_uid::text, '')").From("purchases").Where(sb.Equal("uid", purchaseUID))
 	res, err := db.Query_one(sb)
 	if err != nil {
 		return activationLinkState{Reason: "order not found", Status: http.StatusNotFound}
+	}
+
+	// Yukseltme siparisi (Excel 2.18) mevcut bir etkinlige baglanir; kayit linki yeni ve
+	// paketsiz bir etkinlik acardi.
+	if string(res[2]) != "" {
+		return activationLinkState{Reason: "this order upgrades an existing event, it has no activation link", Status: http.StatusConflict}
 	}
 
 	// Odeme tamamlanmadiysa ortada gonderilecek bir aktivasyon linki yok.

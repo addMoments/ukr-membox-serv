@@ -167,6 +167,11 @@ func main() {
 	// Storage uzatma: tek seferlik hak. Body'siz POST; iz kuralini handler yurutuyor.
 	apiRoutes.HandleFunc("/event/{eventPackedUid}/extend-storage", auth.AuthMiddleware(routes.EventRoutes.ExtendStorage, "auth")).Methods("POST")
 
+	// Paket yukseltme ve ek depolama (Excel 2.18): secenekler ve odeme. Odeme dogrulaninca
+	// Payment_cb yukseltmeyi uygular; admin yeniden uygulama ucu asagida (orders).
+	apiRoutes.HandleFunc("/event/{eventPackedUid}/upgrades", auth.AuthMiddleware(routes.UpgradeRoutes.Options, "auth")).Methods("GET")
+	apiRoutes.HandleFunc("/event/{eventPackedUid}/upgrade", auth.AuthMiddleware(routes.UpgradeRoutes.Purchase, "auth")).Methods("POST")
+
 	apiRoutes.HandleFunc("/purchase", routes.ProductRoutes.Purchase)
 	apiRoutes.HandleFunc("/purchase/{encPackedUID}/status", routes.ProductRoutes.PurchaseStatus).Methods("GET")
 	if !is_live {
@@ -204,6 +209,7 @@ func main() {
 	apiRoutes.HandleFunc("/admin/orders/items/{cartItemUID}/retry-waybill", auth.SuperAdminMiddleware(routes.OrderRoutes.RetryWaybill)).Methods("POST")
 	apiRoutes.HandleFunc("/admin/orders/items/{cartItemUID}", auth.SuperAdminMiddleware(routes.OrderRoutes.UpdateItem)).Methods("PATCH")
 	apiRoutes.HandleFunc("/admin/orders/{purchaseUID}/resend-activation", auth.OrderPanelMiddleware(routes.OrderRoutes.ResendActivation)).Methods("POST")
+	apiRoutes.HandleFunc("/admin/orders/{purchaseUID}/apply-upgrade", auth.OrderPanelMiddleware(routes.OrderRoutes.ApplyUpgrade)).Methods("POST")
 	apiRoutes.HandleFunc("/admin/orders/{purchaseUID}", auth.OrderPanelMiddleware(routes.OrderRoutes.GetOrder)).Methods("GET")
 	apiRoutes.HandleFunc("/admin/orders", auth.OrderPanelMiddleware(routes.OrderRoutes.ListOrders)).Methods("GET")
 	apiRoutes.HandleFunc("/event/{eventPackedUID}/order/items/{cartItemUID}", auth.AuthMiddleware(routes.OrderRoutes.SubmitBuyerConfig, "auth")).Methods("PATCH")
