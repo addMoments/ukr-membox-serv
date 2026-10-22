@@ -375,6 +375,38 @@ SELECT
              ORDER BY ci.created_at ASC LIMIT 1))                                        AS package_mismatches;
 -- upgrade_products = 5, new_columns = 2, package_mismatches = 0 olmali.
 
+-- Ayni kontrol + yeni gun fonksiyonlari eskileriyle ayni sonucu vermeli (hic yukseltme yok).
+-- Biri tutmazsa hata -> ON_ERROR_STOP ile transaction geri alinir, canliya hicbir sey yazilmaz.
+DO $$
+DECLARE
+    v_products   INT;
+    v_columns    INT;
+    v_package    INT;
+    v_days       INT;
+BEGIN
+    SELECT COUNT(*) INTO v_products FROM products WHERE options ? 'upgrade_kind';
+    SELECT COUNT(*) INTO v_columns FROM information_schema.columns
+     WHERE table_name = 'purchases' AND column_name IN ('event_uid', 'upgrade_applied_at');
+    SELECT COUNT(*) INTO v_package FROM events e
+     WHERE e.deleted_at IS NULL AND e.purchase_uid IS NOT NULL
+       AND event_core_product_uid(e.uid) IS DISTINCT FROM (
+           SELECT p.uid FROM purchases pu
+             JOIN cart_items ci ON ci.cart_uid = pu.cart_uid
+             JOIN products p ON p.uid = ci.product_uid AND p.is_add_on = FALSE
+            WHERE pu.uid = e.purchase_uid
+            ORDER BY ci.created_at ASC LIMIT 1);
+    SELECT COUNT(*) INTO v_days FROM events e
+     WHERE e.deleted_at IS NULL AND e.purchase_uid IS NOT NULL
+       AND (get_event_activation_days(e.uid) IS DISTINCT FROM get_purchase_activation_days(e.purchase_uid)
+            OR get_event_storage_days(e.uid) IS DISTINCT FROM get_purchase_storage_days(e.purchase_uid));
+    RAISE NOTICE 'upgrade_products=% new_columns=% package_mismatches=% day_mismatches=%',
+        v_products, v_columns, v_package, v_days;
+    IF v_products <> 5 OR v_columns <> 2 OR v_package <> 0 OR v_days <> 0 THEN
+        RAISE EXCEPTION '17 dogrulama tutmadi, geri aliniyor';
+    END IF;
+END;
+$$;
+
 COMMIT;
 
 NOTIFY pgrst, 'reload schema';
