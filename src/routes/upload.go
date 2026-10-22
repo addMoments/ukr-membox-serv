@@ -248,11 +248,7 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 		var album dbscripts.Album
 		album, err = dbscripts.Get_album(albumUID)
 		if err == nil {
-			var galleryOn bool
-			galleryOn, err = dbscripts.Event_guest_gallery(eventUID)
-			if err == nil {
-				err = dbscripts.Guest_album_upload_access(album, eventUID, galleryOn, claims.Al)
-			}
+			err = dbscripts.Guest_album_upload_access(album, eventUID, claims.Al)
 		}
 		if err != nil {
 			if sendAlbumGuestError(w, err) {

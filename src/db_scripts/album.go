@@ -115,37 +115,23 @@ func Default_album(eventUID string) (albumUID string, err error) {
 	return
 }
 
-// Event_guest_gallery, etkinlik duzeyi galeri anahtarini (settings.guest_gallery) okur.
-// Anahtar yoksa FALSE: mevcut etkinliklerde misafir galeri gormeye devam etmez.
-func Event_guest_gallery(eventUID string) (enabled bool, err error) {
-	bldr := sqlbuilder.BuildNamed(`
-		SELECT COALESCE((settings->>'guest_gallery')::boolean, FALSE)
-		FROM events
-		WHERE uid = ${event_uid}
-	`, map[string]interface{}{"event_uid": eventUID})
-	res, err := db.Query_one(bldr)
-	if err != nil {
-		err = utils.Tag_err("alb4", err)
-		return
-	}
-	enabled = pgBool(res[0])
-	return
-}
-
 // Guest_album_access, misafirin albumu gorup goremeyecegini tek yerde karara baglar.
-// RLS'teki albums_guest_select ile birebir ayni kural (11-albums-v2.sql):
+// RLS'teki albums_guest_select ile birebir ayni kural (15-album-decides-gallery.sql):
 //
 //	silinmemis + ayni etkinlik
-//	+ misafire acik bir yani var: yukleme acik YA DA (album gorunur VE etkinlik galerisi acik)
+//	+ misafire acik bir yani var: yukleme acik YA DA album gorunur
 //	+ public/protected ya da token'da acik
+//
+// 2026-10-22'ye kadar gorunurluk ayrica etkinlik anahtarina (settings.guest_gallery) bagliydi;
+// musteri istegiyle kalkti, galeriye yalnizca albumun guest_view'i karar verir.
 //
 // Protected album token'da yoksa ErrPasscodeRequired, private ise ErrAlbumNotOpened doner;
 // ikisi de "open" ucundan gecilerek asilir. Yukleme ayri: bkz. Guest_album_upload_access.
-func Guest_album_access(album Album, eventUID string, galleryOn bool, openedAlbums []string) error {
+func Guest_album_access(album Album, eventUID string, openedAlbums []string) error {
 	if album.Deleted || album.EventUID != eventUID {
 		return ErrAlbumClosed
 	}
-	if !album.GuestUpload && !(album.GuestView && galleryOn) {
+	if !album.GuestUpload && !album.GuestView {
 		return ErrAlbumClosed
 	}
 	if album.Privacy == "public" {
@@ -163,8 +149,8 @@ func Guest_album_access(album Album, eventUID string, galleryOn bool, openedAlbu
 }
 
 // Guest_album_upload_access: albume yukleme icin gorunurluk kurali + guest_upload acik olmali.
-func Guest_album_upload_access(album Album, eventUID string, galleryOn bool, openedAlbums []string) error {
-	if err := Guest_album_access(album, eventUID, galleryOn, openedAlbums); err != nil {
+func Guest_album_upload_access(album Album, eventUID string, openedAlbums []string) error {
+	if err := Guest_album_access(album, eventUID, openedAlbums); err != nil {
 		return err
 	}
 	if !album.GuestUpload {

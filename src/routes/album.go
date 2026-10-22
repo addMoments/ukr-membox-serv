@@ -366,12 +366,7 @@ func (ar album_routes_typ) GuestOpen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	galleryOn, err := dbscripts.Event_guest_gallery(eventUID)
-	if err != nil {
-		return
-	}
-
-	accessErr := dbscripts.Guest_album_access(album, eventUID, galleryOn, claims.Al)
+	accessErr := dbscripts.Guest_album_access(album, eventUID, claims.Al)
 	switch {
 	case accessErr == nil:
 		// Zaten acik (public ya da token'da). Token'a dokunmaya gerek yok.
@@ -414,12 +409,14 @@ func (ar album_routes_typ) GuestOpen(w http.ResponseWriter, r *http.Request) {
 		"album_uid":    album.UID,
 		"guest_view":   album.GuestView,
 		"guest_upload": album.GuestUpload,
-		"gallery_on":   galleryOn,
+		// Etkinlik galeri anahtari 2026-10-22'de kalkti; deploy sirasinda acik kalan eski
+		// sayfalar bu alani okuyor (gallery_on && guest_view), karari guest_view'e birakir.
+		"gallery_on": true,
 	}
 }
 
 // GuestZip, gorunur bir albumun tum medyasini sikistirmadan zip olarak akitir (karar 4).
-// Kontrol: album misafire acik + guest_download_all + etkinlik guest_gallery + album guest_view.
+// Kontrol: album misafire acik + album guest_view + (secim ya da guest_download_all).
 // GET /api/guest/album/{albumPackedUid}/zip
 // maxGuestZipSelection: misafirin secip tek zip'te indirebilecegi en fazla dosya (AM-12; arayuz 30'da durur).
 const maxGuestZipSelection = 50
@@ -488,14 +485,10 @@ func (ar album_routes_typ) GuestZip(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	galleryOn, err := dbscripts.Event_guest_gallery(eventUID)
-	if err != nil {
+	if err = dbscripts.Guest_album_access(album, eventUID, claims.Al); err != nil {
 		return
 	}
-	if err = dbscripts.Guest_album_access(album, eventUID, galleryOn, claims.Al); err != nil {
-		return
-	}
-	if !galleryOn || !album.GuestView || (len(selected) == 0 && !album.GuestDownloadAll) {
+	if !album.GuestView || (len(selected) == 0 && !album.GuestDownloadAll) {
 		err = dbscripts.ErrAlbumClosed
 		return
 	}
