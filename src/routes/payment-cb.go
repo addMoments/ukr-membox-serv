@@ -132,33 +132,41 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	ub := sqlbuilder.NewUpdateBuilder()
-	if paymentRes.ProviderId != "browser_redirect" {
-		fmt.Println("pcb | writing provider_id:", paymentRes.ProviderId, "for purchase:", purchaseUID)
-		ub.Update("purchases").Set(
-			ub.Assign("provider_id", paymentRes.ProviderId),
-			ub.Assign("provider", paymentRes.Provider),
-		).Where(
-			ub.Equal("uid", purchaseUID),
-			ub.IsNull("provider_id"),
-		)
-		ub.SQL("RETURNING uid")
-		updateRows, updateErr := db.Query_all(ub)
-		if updateErr != nil {
-			err = utils.Tag_err("pcb4", updateErr)
-			return
-		}
-		if len(updateRows) == 0 {
-			// provider_id doluysa bu duplicate callback'tir. Mevcut akisin idempotent
-			// davranisini korumak icin DB yazimlarini ve promo usage artisini atlariz.
-			fmt.Println("pcb | provider_id was already written, skipping duplicate callback")
-			stat_code = http.StatusOK
-			return
-		}
-		fmt.Println("pcb | provider_id written successfully")
-	} else {
-		fmt.Println("pcb | browser_redirect, skipping DB write")
+	// Ne: Tarayicidan gelen GET (browser_redirect) hicbir seyi "odendi" yapmaz; tarayici
+	//     bekleme sayfasina gider, o sayfa PurchaseStatus'u yokluyor.
+	// Neden: GET'te imzali LiqPay verisi yok, yalnizca odeme acilirken URL'ye yazilmis
+	//        "success" durumu var. Bu URL (server_url) alicinin tarayicisina giden LiqPay
+	//        verisinde gorunuyor; GET'i kabul etmek odemeden kayit linki aldiriyordu
+	//        (2026-10-22). Odeme yalnizca imzasi dogrulanmis sunucu bildirimiyle islenir.
+	if paymentRes.ProviderId == "browser_redirect" {
+		fmt.Println("pcb | browser_redirect before the verified callback, sending to the pending page")
+		redr_url = "/checkout/pending/" + pt.ReferenceNo
+		return
 	}
+
+	ub := sqlbuilder.NewUpdateBuilder()
+	fmt.Println("pcb | writing provider_id:", paymentRes.ProviderId, "for purchase:", purchaseUID)
+	ub.Update("purchases").Set(
+		ub.Assign("provider_id", paymentRes.ProviderId),
+		ub.Assign("provider", paymentRes.Provider),
+	).Where(
+		ub.Equal("uid", purchaseUID),
+		ub.IsNull("provider_id"),
+	)
+	ub.SQL("RETURNING uid")
+	updateRows, updateErr := db.Query_all(ub)
+	if updateErr != nil {
+		err = utils.Tag_err("pcb4", updateErr)
+		return
+	}
+	if len(updateRows) == 0 {
+		// provider_id doluysa bu duplicate callback'tir. Mevcut akisin idempotent
+		// davranisini korumak icin DB yazimlarini ve promo usage artisini atlariz.
+		fmt.Println("pcb | provider_id was already written, skipping duplicate callback")
+		stat_code = http.StatusOK
+		return
+	}
+	fmt.Println("pcb | provider_id written successfully")
 
 	// Failed payment from server POST — record it and stop processing
 	if strings.HasPrefix(paymentRes.ProviderId, "failed:") {

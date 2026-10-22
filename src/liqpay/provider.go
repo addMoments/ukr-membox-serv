@@ -134,10 +134,10 @@ func providerHandleCallback(w http.ResponseWriter, r *http.Request, pt payments.
 	fmt.Println("liqpay cb | data empty:", data == "", "| signature empty:", signature == "")
 
 	if data == "" || signature == "" {
-		// Browser GET from result_url redirect — no POST body, but the token already
-		// encodes "success" status (set at URL creation time). Run Payment_cb to show
-		// the user the success/notice screen. Idempotency guard in Payment_cb handles
-		// the case where the server POST already ran first.
+		// Browser GET to the callback URL — no POST body and no signature, only the
+		// "success" status written into the URL when the payment was opened. Payment_cb
+		// treats it as unverified: it shows the result if the signed server POST already
+		// ran, otherwise it sends the browser to the pending page and changes nothing.
 		if r.Method == "GET" {
 			return payments.PaymentRes{
 				ReferenceNo: pt.ReferenceNo,

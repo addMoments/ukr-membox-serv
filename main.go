@@ -84,22 +84,29 @@ func main() {
 
 	// Initialize payment providers
 	e := env.Env()
+	providerArgs := map[string]types.Js_object{
+		"liqpay": {
+			"public_key":  e.LiqPay.PublicKey,
+			"private_key": e.LiqPay.PrivateKey,
+			"sandbox":     e.LiqPay.Sandbox,
+		},
+	}
+	providers := map[string]payments.PaymentProvider{
+		"liqpay": liqpayprovider.NewProvider(),
+	}
+	// Sahte odeme saglayicisi yalnizca yerelde. Canlida kayitliyken /api/purchase'a
+	// provider_id "mock_paynet" yollayan biri /api/mock-paylink sayfasindan odemeyi
+	// "basarili" yapip ucretsiz etkinlik acabiliyordu (2026-10-22).
+	if !is_live {
+		providerArgs["mock_paynet"] = types.Js_object{
+			"root_folder": "./mockpnet",
+			"router":      r,
+		}
+		providers["mock_paynet"] = mockpaynet.NewProvider()
+	}
 	err = payments.Init(
-		map[string]types.Js_object{
-			"mock_paynet": {
-				"root_folder": "./mockpnet",
-				"router":      r,
-			},
-			"liqpay": {
-				"public_key":  e.LiqPay.PublicKey,
-				"private_key": e.LiqPay.PrivateKey,
-				"sandbox":     e.LiqPay.Sandbox,
-			},
-		},
-		map[string]payments.PaymentProvider{
-			"mock_paynet": mockpaynet.NewProvider(),
-			"liqpay":      liqpayprovider.NewProvider(),
-		},
+		providerArgs,
+		providers,
 		e.PaymentSecret,
 		protocol+"://"+env.Current_root(),
 		r,
