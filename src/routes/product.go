@@ -1033,7 +1033,7 @@ func (rfrnc product_routes_typ) AdminUpdateProduct(w http.ResponseWriter, r *htt
 		optionsChanged = true
 	}
 
-	// Yukseltme urunleri (Excel 2.18): ek GB ve ek ay admin panelinden degisir. Yalnizca ayni
+	// Yukseltme urunleri (Excel 2.18): ek GB, ek galeri ayi ve ek yukleme ayi admin panelinden degisir. Yalnizca ayni
 	// turdeki yukseltme urununde kabul edilir; baska bir urune yazilsa limit hesabina karismaz
 	// ama yaniltici olur.
 	upgradeKind, _ := options["upgrade_kind"].(string)
@@ -1043,6 +1043,7 @@ func (rfrnc product_routes_typ) AdminUpdateProduct(w http.ResponseWriter, r *htt
 	}{
 		{"extra_storage_gb", "storage"},
 		{"extra_storage_months", "time"},
+		{"extra_upload_months", "upload"},
 	} {
 		value, has, parseErr := getFirstIntField(req, f.field)
 		if !has {

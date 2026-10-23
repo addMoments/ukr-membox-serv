@@ -20,7 +20,7 @@ var ErrUpgradeWindowClosed = errors.New("the event's gallery period has ended")
 // UpgradeOption, etkinligin mevcut paketine satilabilen bir yukseltme urunu.
 type UpgradeOption struct {
 	ID                 string  `json:"id"`
-	Kind               string  `json:"kind"` // package | storage | time
+	Kind               string  `json:"kind"` // package | storage | time | upload
 	Price              float64 `json:"price"`
 	NameEN             string  `json:"display_name_en"`
 	NameUK             string  `json:"display_name_uk"`
@@ -29,6 +29,7 @@ type UpgradeOption struct {
 	ToPackage          string  `json:"to_package,omitempty"`
 	ExtraStorageGB     float64 `json:"extra_storage_gb,omitempty"`
 	ExtraStorageMonths int     `json:"extra_storage_months,omitempty"`
+	ExtraUploadMonths  int     `json:"extra_upload_months,omitempty"`
 	// Paket yukseltmesinde hedef paket; host kartindaki "ne kazanirim" satirlari bundan uretilir.
 	ToPackageInfo *PackageInfo `json:"to_package_info,omitempty"`
 }
@@ -70,7 +71,9 @@ func Package_info(productID string) (info PackageInfo, err error) {
 
 // Event_upgrade_options, etkinligin gecerli paketine (yukseltme dahil) satilabilen acik
 // yukseltme urunlerini fiyata gore sirali doner. Paket yukseltmesinin hedefi core paket
-// olarak var olmali; admin hedef paketi silerse secenek listeden duser.
+// olarak var olmali; admin hedef paketi silerse secenek listeden duser. Ek GB ve ek yukleme ayi
+// yalnizca yukleme suresi bitmemisken (active_until gelecekte ya da tarih henuz secilmemis;
+// musteri 23 Ekim: "Extra 25 GB will be unvisible after upload period is over").
 func Event_upgrade_options(eventUID string) (current string, options []UpgradeOption, err error) {
 	current, err = Event_tier(eventUID)
 	if err != nil {
@@ -83,16 +86,21 @@ func Event_upgrade_options(eventUID string) (current string, options []UpgradeOp
 		       p.display_name_en, p.display_name_uk, p.display_description_en, p.display_description_uk,
 		       COALESCE(p.options->>'upgrade_to', ''),
 		       COALESCE(p.options->>'extra_storage_gb', ''),
-		       COALESCE(p.options->>'extra_storage_months', '')
+		       COALESCE(p.options->>'extra_storage_months', ''),
+		       COALESCE(p.options->>'extra_upload_months', '')
 		  FROM products p
 		 WHERE p.is_enabled
-		   AND p.options->>'upgrade_kind' IN ('package', 'storage', 'time')
+		   AND p.options->>'upgrade_kind' IN ('package', 'storage', 'time', 'upload')
 		   AND COALESCE(p.options->>'upgrade_from', p.options->>'upgrade_for') = ${current}
 		   AND (p.options->>'upgrade_kind' <> 'package'
 		        OR EXISTS (SELECT 1 FROM products tp
 		                    WHERE tp.id = p.options->>'upgrade_to' AND tp.is_add_on = FALSE))
+		   AND (p.options->>'upgrade_kind' NOT IN ('storage', 'upload')
+		        OR EXISTS (SELECT 1 FROM events e
+		                    WHERE e.uid = ${event_uid}
+		                      AND (e.active_until IS NULL OR e.active_until > NOW())))
 		 ORDER BY p.price ASC, p.id ASC
-	`, map[string]interface{}{"current": current})
+	`, map[string]interface{}{"current": current, "event_uid": eventUID})
 
 	rows, err := db.Query_all(bldr)
 	if err != nil {
@@ -105,6 +113,7 @@ func Event_upgrade_options(eventUID string) (current string, options []UpgradeOp
 		price, _ := strconv.ParseFloat(string(row[2]), 64)
 		gb, _ := strconv.ParseFloat(strings.TrimSpace(string(row[8])), 64)
 		months, _ := strconv.Atoi(strings.TrimSpace(string(row[9])))
+		uploadMonths, _ := strconv.Atoi(strings.TrimSpace(string(row[10])))
 		options = append(options, UpgradeOption{
 			ID:                 string(row[0]),
 			Kind:               string(row[1]),
@@ -116,6 +125,7 @@ func Event_upgrade_options(eventUID string) (current string, options []UpgradeOp
 			ToPackage:          string(row[7]),
 			ExtraStorageGB:     gb,
 			ExtraStorageMonths: months,
+			ExtraUploadMonths:  uploadMonths,
 		})
 	}
 	for i := range options {

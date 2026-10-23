@@ -45,12 +45,12 @@ type upgradeReq struct {
 	ProviderID string        `json:"provider_id"`
 }
 
-// Premium'un +6 ay / +25 GB'si ayni odemede birden fazla alinabilir (musteri 22 Ekim: "Yes, it is
+// Premium'un +6 ay / +25 GB / +1 ay yuklemesi ayni odemede birden fazla alinabilir (musteri 22 Ekim: "Yes, it is
 // possible"); ust sinir yanlislikla buyuk tutar acilmasin diye.
 const maxUpgradeQuantity = 10
 
 // upgradeSelection, istekteki kalemleri etkinlige satilabilen seceneklerle eslestirir.
-// Kural: paket yukseltmesi tek basina ve tek adet; storage/time kalemleri birlikte ve
+// Kural: paket yukseltmesi tek basina ve tek adet; storage/time/upload kalemleri birlikte ve
 // 1..maxUpgradeQuantity adet. Hata kodu bos degilse istek reddedilir.
 func upgradeSelection(req upgradeReq, options []dbscripts.UpgradeOption) (selected []dbscripts.UpgradeOption, quantities map[string]int, total float64, code string, msg string) {
 	items := req.Items
