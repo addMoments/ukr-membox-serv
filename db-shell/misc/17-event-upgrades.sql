@@ -162,7 +162,8 @@ DECLARE
     v_event_uid     UUID;
     v_cart_uid      UUID;
     v_applied_at    TIMESTAMPTZ;
-    v_kind          TEXT;
+    v_items         INT;
+    v_has_package   BOOLEAN;
     v_months        INT;
     v_activation    TIMESTAMPTZ;
     v_active_until  TIMESTAMPTZ;
@@ -182,13 +183,17 @@ BEGIN
         RETURN v_event_uid;
     END IF;
 
-    SELECT p.options->>'upgrade_kind',
-           COALESCE(NULLIF(p.options->>'extra_storage_months', '')::INT, 0) * ci.quantity
-      INTO v_kind, v_months
+    -- Bir sipariste ya tek paket kalemi ya da storage/time kalemleri (adetli) olur (upgrade.go).
+    -- Ay sayisi tum time kalemlerinin toplami.
+    SELECT COUNT(*),
+           COALESCE(bool_or(p.options->>'upgrade_kind' = 'package'), FALSE),
+           COALESCE(SUM(CASE WHEN p.options->>'upgrade_kind' = 'time'
+                             THEN COALESCE(NULLIF(p.options->>'extra_storage_months', '')::INT, 0) * ci.quantity
+                        END), 0)::INT
+      INTO v_items, v_has_package, v_months
       FROM cart_items ci JOIN products p ON p.uid = ci.product_uid
-     WHERE ci.cart_uid = v_cart_uid AND p.options ? 'upgrade_kind'
-     LIMIT 1;
-    IF v_kind IS NULL THEN
+     WHERE ci.cart_uid = v_cart_uid AND p.options ? 'upgrade_kind';
+    IF v_items = 0 THEN
         RAISE EXCEPTION 'NOT_AN_UPGRADE: purchase % has no upgrade item', p_purchase_uid;
     END IF;
 
@@ -205,7 +210,7 @@ BEGIN
 
     v_new_active  := v_active_until;
     v_new_storage := v_storage_until;
-    IF v_kind = 'package' THEN
+    IF v_has_package THEN
         -- upgrade_applied_at yukarida yazildi: get_event_* artik yeni paketi okur.
         v_new_active  := GREATEST(v_active_until,
                                   v_activation + make_interval(days => get_event_activation_days(v_event_uid)));
@@ -214,7 +219,7 @@ BEGIN
                                   + make_interval(days => get_event_storage_days(v_event_uid))
                                   + CASE WHEN v_extended_at IS NOT NULL THEN INTERVAL '30 days' ELSE INTERVAL '0' END
                                   + make_interval(months => event_extra_storage_months(v_event_uid)));
-    ELSIF v_kind = 'time' THEN
+    ELSIF v_months > 0 THEN
         v_new_storage := v_storage_until + make_interval(months => v_months);
     END IF;
 

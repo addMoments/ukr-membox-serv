@@ -1,6 +1,7 @@
 package dbscripts
 
 import (
+	"encoding/json"
 	"errors"
 	db "membox-serv/src/db_layer"
 	"membox-serv/src/utils"
@@ -28,6 +29,43 @@ type UpgradeOption struct {
 	ToPackage          string  `json:"to_package,omitempty"`
 	ExtraStorageGB     float64 `json:"extra_storage_gb,omitempty"`
 	ExtraStorageMonths int     `json:"extra_storage_months,omitempty"`
+	// Paket yukseltmesinde hedef paket; host kartindaki "ne kazanirim" satirlari bundan uretilir.
+	ToPackageInfo *PackageInfo `json:"to_package_info,omitempty"`
+}
+
+// PackageInfo, bir core paketin adlari, limitleri (products.options) ve ozellikleri
+// (granted_features). Host karti mevcut ve hedef paketi karsilastirip farki gosterir; admin bir
+// limiti degistirirse kart da onu gosterir.
+type PackageInfo struct {
+	ID       string          `json:"id"`
+	NameEN   string          `json:"display_name_en"`
+	NameUK   string          `json:"display_name_uk"`
+	Options  json.RawMessage `json:"options"`
+	Features []int           `json:"granted_features"`
+}
+
+// Package_info, id'si verilen urunun PackageInfo'su.
+func Package_info(productID string) (info PackageInfo, err error) {
+	bldr := sqlbuilder.BuildNamed(`
+		SELECT id, COALESCE(display_name_en, ''), COALESCE(display_name_uk, ''),
+		       COALESCE(options, '{}')::text, COALESCE(array_to_json(granted_features), '[]')::text
+		  FROM products WHERE id = ${id}
+	`, map[string]interface{}{"id": productID})
+	res, err := db.Query_one(bldr)
+	if err != nil {
+		err = utils.Tag_err("upg7", err)
+		return
+	}
+	info = PackageInfo{
+		ID:      string(res[0]),
+		NameEN:  string(res[1]),
+		NameUK:  string(res[2]),
+		Options: json.RawMessage(append([]byte(nil), res[3]...)),
+	}
+	if err = json.Unmarshal(res[4], &info.Features); err != nil {
+		err = utils.Tag_err("upg8", err)
+	}
+	return
 }
 
 // Event_upgrade_options, etkinligin gecerli paketine (yukseltme dahil) satilabilen acik
@@ -79,6 +117,17 @@ func Event_upgrade_options(eventUID string) (current string, options []UpgradeOp
 			ExtraStorageGB:     gb,
 			ExtraStorageMonths: months,
 		})
+	}
+	for i := range options {
+		if options[i].Kind != "package" {
+			continue
+		}
+		info, infoErr := Package_info(options[i].ToPackage)
+		if infoErr != nil {
+			err = infoErr
+			return
+		}
+		options[i].ToPackageInfo = &info
 	}
 	return
 }

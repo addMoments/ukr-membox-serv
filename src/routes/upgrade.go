@@ -34,9 +34,61 @@ type upgrade_routes_typ struct{}
 
 var UpgradeRoutes upgrade_routes_typ
 
+type upgradeItem struct {
+	ProductID string `json:"product_id"`
+	Quantity  int    `json:"quantity"`
+}
+
 type upgradeReq struct {
-	ProductID  string `json:"product_id"`
-	ProviderID string `json:"provider_id"`
+	Items      []upgradeItem `json:"items"`
+	ProductID  string        `json:"product_id"` // tek kalem, adet 1 (ilk bicim)
+	ProviderID string        `json:"provider_id"`
+}
+
+// Premium'un +6 ay / +25 GB'si ayni odemede birden fazla alinabilir (musteri 22 Ekim: "Yes, it is
+// possible"); ust sinir yanlislikla buyuk tutar acilmasin diye.
+const maxUpgradeQuantity = 10
+
+// upgradeSelection, istekteki kalemleri etkinlige satilabilen seceneklerle eslestirir.
+// Kural: paket yukseltmesi tek basina ve tek adet; storage/time kalemleri birlikte ve
+// 1..maxUpgradeQuantity adet. Hata kodu bos degilse istek reddedilir.
+func upgradeSelection(req upgradeReq, options []dbscripts.UpgradeOption) (selected []dbscripts.UpgradeOption, quantities map[string]int, total float64, code string, msg string) {
+	items := req.Items
+	if len(items) == 0 && req.ProductID != "" {
+		items = []upgradeItem{{ProductID: req.ProductID, Quantity: 1}}
+	}
+	if len(items) == 0 {
+		return nil, nil, 0, "UPGRADE_EMPTY", "no upgrade selected"
+	}
+
+	byID := map[string]dbscripts.UpgradeOption{}
+	for _, option := range options {
+		byID[option.ID] = option
+	}
+	quantities = map[string]int{}
+	hasPackage := false
+	for _, item := range items {
+		option, offered := byID[item.ProductID]
+		if !offered {
+			return nil, nil, 0, "UPGRADE_NOT_OFFERED", dbscripts.ErrUpgradeNotOffered.Error()
+		}
+		if _, dup := quantities[item.ProductID]; dup {
+			return nil, nil, 0, "UPGRADE_INVALID", "each upgrade can be listed once"
+		}
+		if item.Quantity < 1 || item.Quantity > maxUpgradeQuantity {
+			return nil, nil, 0, "UPGRADE_INVALID", fmt.Sprintf("quantity must be between 1 and %d", maxUpgradeQuantity)
+		}
+		if option.Kind == "package" {
+			hasPackage = true
+		}
+		quantities[item.ProductID] = item.Quantity
+		selected = append(selected, option)
+		total += option.Price * float64(item.Quantity)
+	}
+	if hasPackage && (len(items) != 1 || items[0].Quantity != 1) {
+		return nil, nil, 0, "UPGRADE_INVALID", "a package upgrade is bought on its own, once"
+	}
+	return selected, quantities, total, "", ""
 }
 
 // upgradeEventFromRequest, yol parametresindeki etkinligi cozer ve istegi yapanin o etkinligin
@@ -90,28 +142,26 @@ func (ur upgrade_routes_typ) Options(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sb := sqlbuilder.NewSelectBuilder()
-	sb.Select("display_name_en", "display_name_uk").From("products").Where(sb.Equal("id", current))
-	names, err := db.Query_one(sb)
+	currentPackage, err := dbscripts.Package_info(current)
 	if err != nil {
 		http.Error(w, utils.Tag_err("upr2", err).Error(), http.StatusInternalServerError)
 		return
 	}
 
 	networkutils.SendJson(types.Js_object{
-		"current_package": types.Js_object{
-			"id":              current,
-			"display_name_en": string(names[0]),
-			"display_name_uk": string(names[1]),
-		},
+		"current_package": currentPackage,
 		// Galeri suresi bittiyse secenekler gosterilir ama satin alinamaz.
-		"window_open": windowOpen,
-		"options":     options,
+		"window_open":  windowOpen,
+		"options":      options,
+		"max_quantity": maxUpgradeQuantity,
 	}, w)
 }
 
 // POST /api/event/{eventPackedUid}/upgrade
-// Body: {"product_id": "upgrade_standard_plus", "provider_id": "liqpay"}
+// Body: {"items": [{"product_id": "premium_extra_storage", "quantity": 2}, ...], "provider_id": "liqpay"}
+//
+//	ya da tek kalem icin {"product_id": "upgrade_standard_plus"}
+//
 // Cevap odeme saglayicisinin formu (normal /api/purchase ile ayni bicim).
 func (ur upgrade_routes_typ) Purchase(w http.ResponseWriter, r *http.Request) {
 	eventUID, claims, ok := upgradeEventFromRequest(w, r)
@@ -167,15 +217,13 @@ func (ur upgrade_routes_typ) Purchase(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	var option *dbscripts.UpgradeOption
-	for i := range options {
-		if options[i].ID == req.ProductID {
-			option = &options[i]
-			break
-		}
+	selected, quantities, total, code, msg := upgradeSelection(req, options)
+	if code == "UPGRADE_NOT_OFFERED" {
+		_ = networkutils.SendErrorJSON(w, http.StatusConflict, code, msg)
+		return
 	}
-	if option == nil {
-		_ = networkutils.SendErrorJSON(w, http.StatusConflict, "UPGRADE_NOT_OFFERED", dbscripts.ErrUpgradeNotOffered.Error())
+	if code != "" {
+		_ = networkutils.SendErrorJSON(w, http.StatusBadRequest, code, msg)
 		return
 	}
 
@@ -189,14 +237,18 @@ func (ur upgrade_routes_typ) Purchase(w http.ResponseWriter, r *http.Request) {
 	email := string(userRow[0])
 
 	cart := types.Cart{}
-	cartUID, cartItems, err := cart.InsertQuantityMap(map[string]int{option.ID: 1})
+	cartUID, cartItems, err := cart.InsertQuantityMap(quantities)
 	if err != nil {
 		err = utils.Tag_err("upp3", err)
 		return
 	}
 
+	productIDs := []string{}
+	for id := range quantities {
+		productIDs = append(productIDs, id)
+	}
 	productSB := sqlbuilder.NewSelectBuilder()
-	productSB.Select("uid", "price").From("products").Where(productSB.Equal("id", option.ID))
+	productSB.Select("uid", "price").From("products").Where(productSB.In("id", db.Interface_ar(productIDs)...))
 	products, err := db.Query_all(productSB)
 	if err != nil {
 		err = utils.Tag_err("upp4", err)
@@ -207,11 +259,15 @@ func (ur upgrade_routes_typ) Purchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	purchaseInfo := types.Js_object{"email": email, "upgrade": option.ID}
+	upgradeInfo := types.Js_object{}
+	for id, quantity := range quantities {
+		upgradeInfo[id] = quantity
+	}
+	purchaseInfo := types.Js_object{"email": email, "upgrade": upgradeInfo}
 	ib := sqlbuilder.NewInsertBuilder()
 	ib.InsertInto("purchases")
 	ib.Cols("purchase_info", "cart_uid", "provider", "buyer_uid", "event_uid", "gross_total", "discount_amount", "net_total")
-	ib.Values(purchaseInfo.Json(), cartUID, provider.Name, claims.UserUID, eventUID, option.Price, 0, option.Price)
+	ib.Values(purchaseInfo.Json(), cartUID, provider.Name, claims.UserUID, eventUID, total, 0, total)
 	ib.SQL("RETURNING uid")
 	res, err := db.Query_one(ib)
 	if err != nil {
@@ -231,18 +287,26 @@ func (ur upgrade_routes_typ) Purchase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	name := option.NameEN
-	if strings.HasPrefix(strings.ToLower(r.Header.Get("Accept-Language")), "uk") && option.NameUK != "" {
-		name = option.NameUK
+	ukrainian := strings.HasPrefix(strings.ToLower(r.Header.Get("Accept-Language")), "uk")
+	names := []string{}
+	for _, option := range selected {
+		name := option.NameEN
+		if ukrainian && option.NameUK != "" {
+			name = option.NameUK
+		}
+		if quantities[option.ID] > 1 {
+			name += fmt.Sprintf(" × %d", quantities[option.ID])
+		}
+		names = append(names, name)
 	}
-	fmt.Printf("[upgrade.purchase] event=%s user=%s product=%s purchase=%s amount=%.2f\n",
-		eventUID, claims.UserUID, option.ID, purchaseUID, option.Price)
+	fmt.Printf("[upgrade.purchase] event=%s user=%s items=%v purchase=%s amount=%.2f\n",
+		eventUID, claims.UserUID, quantities, purchaseUID, total)
 
 	err = provider.OpenPayment(w, r, payments.PaymentRequest{
 		Currency:               "UAH",
 		Addcomission_to_amount: true,
-		Note:                   "Addmoments: " + name,
-		Amount:                 option.Price,
+		Note:                   "Addmoments: " + strings.Join(names, ", "),
+		Amount:                 total,
 		Name:                   email,
 		ReferenceNo:            encPackedPurchaseUID,
 	})
