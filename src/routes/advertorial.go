@@ -188,15 +188,22 @@ func fetchEventAdvertorialConfig(eventUID string) (types.Js_object, error) {
 		return nil, err
 	}
 
+	return parseAdvertorialConfig(row[0]), nil
+}
+
+// parseAdvertorialConfig, kayitli reklam JSON'unu layout/cells config'ine cevirir.
+// Bos veya parse edilemeyen degerlerde varsayilan config'e geri duser. Etkinlik reklami ve
+// AddMoments reklami (site_settings) ayni bicimi tasir.
+func parseAdvertorialConfig(rawBytes []byte) types.Js_object {
 	cfg := defaultAdvertorialConfig()
-	raw := strings.TrimSpace(string(row[0]))
+	raw := strings.TrimSpace(string(rawBytes))
 	if raw == "" || raw == "null" {
-		return cfg, nil
+		return cfg
 	}
 
 	parsed := types.Js_object{}
-	if err := json.Unmarshal(row[0], &parsed); err != nil {
-		return cfg, nil
+	if err := json.Unmarshal(rawBytes, &parsed); err != nil {
+		return cfg
 	}
 
 	if layoutRaw, ok := parsed["layout"].(string); ok && layoutRaw != "" {
@@ -216,7 +223,7 @@ func fetchEventAdvertorialConfig(eventUID string) (types.Js_object, error) {
 		cfg["cells"] = normalizedCells
 	}
 
-	return cfg, nil
+	return cfg
 }
 
 // PrivateUploadURL, event adminine reklam gorseli icin presigned S3 upload URL'i uretir.
@@ -263,6 +270,17 @@ func (ar advertorial_routes_typ) PrivateUploadURL(w http.ResponseWriter, r *http
 	}
 	if !isAdmin {
 		err = errors.New("forbidden")
+		statCode = http.StatusForbidden
+		return
+	}
+
+	managed, err := dbscripts.Has_feature(eventUID, dbscripts.FeatureAddmomentsAds)
+	if err != nil {
+		err = utils.Tag_err("aru3m", err)
+		return
+	}
+	if managed {
+		err = errAdsManagedByAddmoments
 		statCode = http.StatusForbidden
 		return
 	}
@@ -391,6 +409,27 @@ func (ar advertorial_routes_typ) PrivateGet(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Ozel paketlerde alan AddMoments'in: host ayar ekraninda kilitli gorur, tema onizlemesi
+	// misafirin gordugu AddMoments reklamini gosterir.
+	managed, err := dbscripts.Has_feature(eventUID, dbscripts.FeatureAddmomentsAds)
+	if err != nil {
+		err = utils.Tag_err("arg3m", err)
+		return
+	}
+	if managed {
+		cfg, cfgErr := fetchAddmomentsAdsConfig()
+		if cfgErr != nil {
+			err = utils.Tag_err("arg3a", cfgErr)
+			return
+		}
+		_ = networkutils.SendJson(types.Js_object{
+			"enabled":    true,
+			"managed_by": "addmoments",
+			"config":     cfg,
+		}, w)
+		return
+	}
+
 	hasAdvertorial, err := dbscripts.Has_feature(eventUID, dbscripts.FeatureAdvertorial)
 	if err != nil {
 		err = utils.Tag_err("arg3", err)
@@ -453,6 +492,17 @@ func (ar advertorial_routes_typ) PrivatePatch(w http.ResponseWriter, r *http.Req
 	}
 	if !isAdmin {
 		err = errors.New("forbidden")
+		statCode = http.StatusForbidden
+		return
+	}
+
+	managed, err := dbscripts.Has_feature(eventUID, dbscripts.FeatureAddmomentsAds)
+	if err != nil {
+		err = utils.Tag_err("arp3m", err)
+		return
+	}
+	if managed {
+		err = errAdsManagedByAddmoments
 		statCode = http.StatusForbidden
 		return
 	}
@@ -528,6 +578,25 @@ func (ar advertorial_routes_typ) PublicGet(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		err = utils.Tag_err("apg1", err)
 		statCode = http.StatusBadRequest
+		return
+	}
+
+	managed, err := dbscripts.Has_feature(eventUID, dbscripts.FeatureAddmomentsAds)
+	if err != nil {
+		err = utils.Tag_err("apg2m", err)
+		return
+	}
+	if managed {
+		cfg, cfgErr := fetchAddmomentsAdsConfig()
+		if cfgErr != nil {
+			err = utils.Tag_err("apg2a", cfgErr)
+			return
+		}
+		_ = networkutils.SendJson(types.Js_object{
+			"enabled":    true,
+			"managed_by": "addmoments",
+			"config":     cfg,
+		}, w)
 		return
 	}
 

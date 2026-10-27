@@ -154,6 +154,10 @@ func main() {
 	apiRoutes.HandleFunc("/admin/products", auth.SuperAdminMiddleware(routes.ProductRoutes.AdminListProducts)).Methods("GET")
 	apiRoutes.HandleFunc("/admin/products/upload-url", auth.SuperAdminMiddleware(routes.ProductRoutes.AdminCreateAddonImageUploadURL)).Methods("POST")
 	apiRoutes.HandleFunc("/admin/products/{productUid}", auth.SuperAdminMiddleware(routes.ProductRoutes.AdminUpdateProduct)).Methods("PATCH")
+	// AddMoments reklami (Excel madde 6): ozel paketli etkinliklerin misafir sayfasinda, host degistiremez.
+	apiRoutes.HandleFunc("/admin/addmoments-ads", auth.SuperAdminMiddleware(routes.AddmomentsAdsRoutes.AdminGet)).Methods("GET")
+	apiRoutes.HandleFunc("/admin/addmoments-ads", auth.SuperAdminMiddleware(routes.AddmomentsAdsRoutes.AdminPatch)).Methods("PATCH")
+	apiRoutes.HandleFunc("/admin/addmoments-ads/upload-url", auth.SuperAdminMiddleware(routes.AddmomentsAdsRoutes.AdminUploadURL)).Methods("POST")
 	// T-14 uyari mail + T-0 soft-delete'i manuel tetikler. ?dry_run=true ile
 	// hicbir veriyi degistirmeden sadece etkilenecek sayilari raporlar.
 	apiRoutes.HandleFunc("/admin/run-storage-check", auth.SuperAdminMiddleware(routes.AdminStorageRoutes.RunStorageCheck)).Methods("POST")

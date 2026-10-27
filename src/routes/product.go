@@ -818,7 +818,9 @@ func (rfrnc product_routes_typ) AdminUpdateProduct(w http.ResponseWriter, r *htt
 		assignments = append(assignments, ub.Assign("display_bullets_uk", displayBulletsUK))
 	}
 
-	// Add-on aktif/pasif kontrolu sadece add-on urunler icin aciktir.
+	// Aktif/pasif kontrolu add-on'lar ve ozel paketler (Excel madde 6) icin aciktir. Mini/Classic/Premium
+	// kapatilirsa Services & Prices'ta satilacak paket kalmaz.
+	isSpecialPackage := options["special_package"] == true
 	if rawEnabled, hasEnabled := req["is_enabled"]; hasEnabled {
 		isEnabled, ok := rawEnabled.(bool)
 		if !ok {
@@ -826,9 +828,9 @@ func (rfrnc product_routes_typ) AdminUpdateProduct(w http.ResponseWriter, r *htt
 			err = errors.New("is_enabled must be a boolean")
 			return
 		}
-		if !isAddOn {
+		if !isAddOn && !isSpecialPackage {
 			stat_code = http.StatusUnprocessableEntity
-			err = errors.New("is_enabled can only be updated for add-on products")
+			err = errors.New("is_enabled can only be updated for add-on products and special packages")
 			return
 		}
 		assignments = append(assignments, ub.Assign("is_enabled", isEnabled))
@@ -1066,6 +1068,19 @@ func (rfrnc product_routes_typ) AdminUpdateProduct(w http.ResponseWriter, r *htt
 		}
 		options[f.field] = value
 		optionsChanged = true
+	}
+
+	// Ozel paketlerde saklama suresi aktivasyondan itibaren toplam (musteri 26 Ekim: "12 months in total";
+	// 18-special-packages.sql package_storage_after_upload). Yukleme suresinden kisa bir toplam, galeriyi
+	// yukleme biterken kapatir; admin bunu yanlislikla girmesin.
+	if optionsChanged && options["storage_from_activation"] == true {
+		activationDays, _, _ := getFirstIntField(options, "activation_days")
+		storageDays, _, _ := getFirstIntField(options, "storage_days")
+		if storageDays < activationDays {
+			stat_code = 400
+			err = errors.New("storage period is counted from activation for this package and must be at least the upload period")
+			return
+		}
 	}
 
 	if optionsChanged {
@@ -1343,6 +1358,29 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 	if len(upgradeIDs) > 0 {
 		stat_code = http.StatusBadRequest
 		err = errors.New("upgrade products can only be bought from the event page: " + strings.Join(upgradeIDs, ", "))
+		return
+	}
+
+	// Kapali urunler satilmaz ve ozel paket (reklami AddMoments'in) host reklam alaniyla birlikte alinmaz
+	// (Excel madde 6).
+	disabledIDs, err := dbscripts.Disabled_product_ids(requestedIDs)
+	if err != nil {
+		err = utils.Tag_err("mce2d", err)
+		return
+	}
+	if len(disabledIDs) > 0 {
+		stat_code = http.StatusBadRequest
+		err = errors.New("products are not available: " + strings.Join(disabledIDs, ", "))
+		return
+	}
+	adConflict, err := dbscripts.Special_package_with_ad_zone(requestedIDs)
+	if err != nil {
+		err = utils.Tag_err("mce2a", err)
+		return
+	}
+	if adConflict {
+		stat_code = http.StatusBadRequest
+		err = errors.New("the advertising area of this package is managed by AddMoments and cannot be bought separately")
 		return
 	}
 

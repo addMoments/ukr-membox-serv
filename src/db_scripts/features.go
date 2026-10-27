@@ -9,4 +9,7 @@ const (
 	FeatureVoice  = 3
 	// FeatureAdvertorial, guest sayfasindaki reklam alani (layout + banner hucreleri) hakkini belirtir.
 	FeatureAdvertorial = 4
+	// FeatureAddmomentsAds, reklam alanini AddMoments'in yonettigini belirtir (Excel madde 6 ozel paketleri):
+	// misafir sayfasi site_settings.addmoments_ads reklamini gosterir, host alani duzenleyemez. 4'ten onceliklidir.
+	FeatureAddmomentsAds = 5
 )
