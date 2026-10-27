@@ -71,9 +71,11 @@ func Package_info(productID string) (info PackageInfo, err error) {
 
 // Event_upgrade_options, etkinligin gecerli paketine (yukseltme dahil) satilabilen acik
 // yukseltme urunlerini fiyata gore sirali doner. Paket yukseltmesinin hedefi core paket
-// olarak var olmali; admin hedef paketi silerse secenek listeden duser. Ek GB ve ek yukleme ayi
-// yalnizca yukleme suresi bitmemisken (active_until gelecekte ya da tarih henuz secilmemis;
-// musteri 23 Ekim: "Extra 25 GB will be unvisible after upload period is over").
+// olarak var olmali; admin hedef paketi silerse secenek listeden duser. Ek GB yalnizca yukleme
+// suresi bitmemisken (active_until gelecekte ya da tarih henuz secilmemis; musteri 23 Ekim:
+// "Extra 25 GB will be unvisible after upload period is over"). Ek yukleme ayi yukleme bittikten
+// sonra da satilir (musteri 27 Ekim: "1 month Link extension ... should be" visible); link
+// satin alindigi andan acilir (19-upload-extension-after-end.sql, upgrade_extra_dates).
 func Event_upgrade_options(eventUID string) (current string, options []UpgradeOption, err error) {
 	current, err = Event_tier(eventUID)
 	if err != nil {
@@ -95,7 +97,7 @@ func Event_upgrade_options(eventUID string) (current string, options []UpgradeOp
 		   AND (p.options->>'upgrade_kind' <> 'package'
 		        OR EXISTS (SELECT 1 FROM products tp
 		                    WHERE tp.id = p.options->>'upgrade_to' AND tp.is_add_on = FALSE))
-		   AND (p.options->>'upgrade_kind' NOT IN ('storage', 'upload')
+		   AND (p.options->>'upgrade_kind' <> 'storage'
 		        OR EXISTS (SELECT 1 FROM events e
 		                    WHERE e.uid = ${event_uid}
 		                      AND (e.active_until IS NULL OR e.active_until > NOW())))
