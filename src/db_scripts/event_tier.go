@@ -38,6 +38,39 @@ func Has_feature(eventUID string, featureID int) (has bool, err error) {
 	return
 }
 
+// Event_addmoments_ads_set, etkinligin gecerli paketinin (yukseltme dahil) AddMoments reklam grubu:
+// products.options.addmoments_ads_set (20-special-upgrades-and-ad-sets.sql; school, hero, mini).
+// Paketin grubu yoksa ya da etkinlik bulunamazsa bos doner.
+func Event_addmoments_ads_set(eventUID string) (set string, err error) {
+	bldr := sqlbuilder.BuildNamed(`
+		SELECT COALESCE(p.options->>'addmoments_ads_set', '')
+		  FROM events e
+		  JOIN products p ON p.uid = event_core_product_uid(e.uid)
+		 WHERE e.uid = ${event_uid}
+		   AND e.deleted_at IS NULL
+	`, map[string]interface{}{"event_uid": eventUID})
+
+	rows, err := db.Query_all(bldr)
+	if err != nil || len(rows) == 0 {
+		return
+	}
+	set = string(rows[0][0])
+	return
+}
+
+// Addmoments_ads_set_exists, bir urunun bu reklam grubunu kullanip kullanmadigi. Admin yalniz
+// kullanilan bir grubun reklamini duzenler; yazim hatasi site_settings'e sahipsiz satir acmaz.
+func Addmoments_ads_set_exists(set string) (exists bool, err error) {
+	sb := sqlbuilder.NewSelectBuilder()
+	sb.Select("COUNT(*)").From("products").Where(sb.Equal("options->>'addmoments_ads_set'", set))
+	res, err := db.Query_one(sb)
+	if err != nil {
+		return
+	}
+	exists = string(res[0]) != "0"
+	return
+}
+
 var ErrLimitReached = errors.New("limit reached")
 var ErrGuestLimitReached = errors.New("guest limit reached")
 var ErrMediaLimitReached = errors.New("media limit reached")

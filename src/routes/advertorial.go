@@ -274,7 +274,7 @@ func (ar advertorial_routes_typ) PrivateUploadURL(w http.ResponseWriter, r *http
 		return
 	}
 
-	managed, err := dbscripts.Has_feature(eventUID, dbscripts.FeatureAddmomentsAds)
+	_, managed, err := eventAddmomentsAds(eventUID)
 	if err != nil {
 		err = utils.Tag_err("aru3m", err)
 		return
@@ -409,23 +409,18 @@ func (ar advertorial_routes_typ) PrivateGet(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Ozel paketlerde alan AddMoments'in: host ayar ekraninda kilitli gorur, tema onizlemesi
-	// misafirin gordugu AddMoments reklamini gosterir.
-	managed, err := dbscripts.Has_feature(eventUID, dbscripts.FeatureAddmomentsAds)
+	// Alan AddMoments'in (ozel paketler; reklami kuruluysa Mini): host ayar ekraninda kilitli gorur,
+	// tema onizlemesi misafirin gordugu AddMoments reklamini gosterir.
+	managedCfg, managed, err := eventAddmomentsAds(eventUID)
 	if err != nil {
 		err = utils.Tag_err("arg3m", err)
 		return
 	}
 	if managed {
-		cfg, cfgErr := fetchAddmomentsAdsConfig()
-		if cfgErr != nil {
-			err = utils.Tag_err("arg3a", cfgErr)
-			return
-		}
 		_ = networkutils.SendJson(types.Js_object{
 			"enabled":    true,
 			"managed_by": "addmoments",
-			"config":     cfg,
+			"config":     managedCfg,
 		}, w)
 		return
 	}
@@ -496,7 +491,7 @@ func (ar advertorial_routes_typ) PrivatePatch(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	managed, err := dbscripts.Has_feature(eventUID, dbscripts.FeatureAddmomentsAds)
+	_, managed, err := eventAddmomentsAds(eventUID)
 	if err != nil {
 		err = utils.Tag_err("arp3m", err)
 		return
@@ -581,21 +576,16 @@ func (ar advertorial_routes_typ) PublicGet(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	managed, err := dbscripts.Has_feature(eventUID, dbscripts.FeatureAddmomentsAds)
+	managedCfg, managed, err := eventAddmomentsAds(eventUID)
 	if err != nil {
 		err = utils.Tag_err("apg2m", err)
 		return
 	}
 	if managed {
-		cfg, cfgErr := fetchAddmomentsAdsConfig()
-		if cfgErr != nil {
-			err = utils.Tag_err("apg2a", cfgErr)
-			return
-		}
 		_ = networkutils.SendJson(types.Js_object{
 			"enabled":    true,
 			"managed_by": "addmoments",
-			"config":     cfg,
+			"config":     managedCfg,
 		}, w)
 		return
 	}
