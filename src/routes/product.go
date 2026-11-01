@@ -852,100 +852,62 @@ func (rfrnc product_routes_typ) AdminUpdateProduct(w http.ResponseWriter, r *htt
 	}
 
 	optionsChanged := false
-	if rawImage, hasImage := optionsFromReq["image"]; hasImage {
+	// Ek urun gorselleri: Services & Prices'taki (image, mobile_image) ve ozel paketler sayfasindaki
+	// (special_image, special_mobile_image; musteri 29 Ekim: ozel sayfada School/Hero temali, ana sayfadan
+	// bagimsiz). Dordu de ayni kural: yalniz add-on, bizim S3 addon_banner/ klasoru, nesne S3'te var olmali;
+	// bos string alani kaldirir.
+	for _, imageField := range []struct{ key, tag string }{
+		{"image", "aup8"}, {"mobile_image", "aup9"}, {"special_image", "aup8s"}, {"special_mobile_image", "aup9s"},
+	} {
+		rawImage, hasImage := optionsFromReq[imageField.key]
+		if !hasImage {
+			continue
+		}
 		imageURL, ok := rawImage.(string)
 		if !ok {
 			stat_code = 400
-			err = errors.New("options.image must be a string")
+			err = fmt.Errorf("options.%s must be a string", imageField.key)
 			return
 		}
 		if !isAddOn {
 			stat_code = http.StatusUnprocessableEntity
-			err = errors.New("options.image can only be updated for add-on products")
+			err = fmt.Errorf("options.%s can only be updated for add-on products", imageField.key)
 			return
 		}
 
 		imageURL = strings.TrimSpace(imageURL)
 		if imageURL == "" {
-			delete(options, "image")
+			delete(options, imageField.key)
 			optionsChanged = true
-		} else {
-			if err = validateAddonImageURL(imageURL); err != nil {
-				stat_code = 400
-				return
-			}
-
-			// Yanlis/eksik upload URL'siyle DB'ye kirik link yazilmamasi icin
-			// ilgili S3 objesinin varligini kontrol ediyoruz.
-			imagePath, decodeErr := s3wrap.Public_s3.Decode_url(imageURL)
-			if decodeErr != nil {
-				stat_code = 400
-				err = errors.New("invalid image url for this s3 bucket")
-				return
-			}
-			imagePath = strings.TrimPrefix(imagePath, "/")
-			exists, existsErr := s3wrap.Public_s3.Exists(imagePath)
-			if existsErr != nil {
-				err = utils.Tag_err("aup8", existsErr)
-				return
-			}
-			if !exists {
-				stat_code = http.StatusUnprocessableEntity
-				err = errors.New("options.image object not found in s3")
-				return
-			}
-
-			options["image"] = imageURL
-			optionsChanged = true
+			continue
 		}
-	}
-
-	if rawMobileImage, hasMobileImage := optionsFromReq["mobile_image"]; hasMobileImage {
-		mobileImageURL, ok := rawMobileImage.(string)
-		if !ok {
+		if err = validateAddonImageURL(imageURL); err != nil {
 			stat_code = 400
-			err = errors.New("options.mobile_image must be a string")
 			return
 		}
-		if !isAddOn {
+
+		// Yanlis/eksik upload URL'siyle DB'ye kirik link yazilmamasi icin
+		// ilgili S3 objesinin varligini kontrol ediyoruz.
+		imagePath, decodeErr := s3wrap.Public_s3.Decode_url(imageURL)
+		if decodeErr != nil {
+			stat_code = 400
+			err = fmt.Errorf("invalid %s url for this s3 bucket", imageField.key)
+			return
+		}
+		imagePath = strings.TrimPrefix(imagePath, "/")
+		exists, existsErr := s3wrap.Public_s3.Exists(imagePath)
+		if existsErr != nil {
+			err = utils.Tag_err(imageField.tag, existsErr)
+			return
+		}
+		if !exists {
 			stat_code = http.StatusUnprocessableEntity
-			err = errors.New("options.mobile_image can only be updated for add-on products")
+			err = fmt.Errorf("options.%s object not found in s3", imageField.key)
 			return
 		}
 
-		mobileImageURL = strings.TrimSpace(mobileImageURL)
-		if mobileImageURL == "" {
-			delete(options, "mobile_image")
-			optionsChanged = true
-		} else {
-			if err = validateAddonImageURL(mobileImageURL); err != nil {
-				stat_code = 400
-				return
-			}
-
-			// Mobil gorsel de ayni add-on S3 upload akisini kullanir; kirik link
-			// yazmamak icin desktop image ile ayni bucket/object kontrolunden geciriyoruz.
-			mobileImagePath, decodeErr := s3wrap.Public_s3.Decode_url(mobileImageURL)
-			if decodeErr != nil {
-				stat_code = 400
-				err = errors.New("invalid mobile_image url for this s3 bucket")
-				return
-			}
-			mobileImagePath = strings.TrimPrefix(mobileImagePath, "/")
-			exists, existsErr := s3wrap.Public_s3.Exists(mobileImagePath)
-			if existsErr != nil {
-				err = utils.Tag_err("aup9", existsErr)
-				return
-			}
-			if !exists {
-				stat_code = http.StatusUnprocessableEntity
-				err = errors.New("options.mobile_image object not found in s3")
-				return
-			}
-
-			options["mobile_image"] = mobileImageURL
-			optionsChanged = true
-		}
+		options[imageField.key] = imageURL
+		optionsChanged = true
 	}
 
 	if guestCount, hasGuest, parseErr := getFirstIntField(req, "guest_count"); hasGuest {
