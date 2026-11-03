@@ -8,6 +8,7 @@ import (
 	"membox-serv/src/auth"
 	db "membox-serv/src/db_layer"
 	dbscripts "membox-serv/src/db_scripts"
+	eventcleanup "membox-serv/src/event_cleanup"
 	networkutils "membox-serv/src/network_utils"
 	s3wrap "membox-serv/src/s3-wrap"
 	uploadreceipt "membox-serv/src/upload_receipt"
@@ -568,6 +569,74 @@ func (ur upload_routes_typ) Delete(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 	}
 	stat_code = http.StatusOK
+}
+
+type deleteTrashedReq struct {
+	All        bool     `json:"all"`
+	UploadUIDs []string `json:"upload_uids"`
+}
+
+// DeleteTrashed, etkinligin copteki foto/videolarini kalici siler: {"all": true} tum copu,
+// {"upload_uids": [...]} yalnizca secilenleri (musteri 2 Kasim, 2.26: "delete all, multi delete").
+// Yalnizca etkinlik yoneticisi; copte olmayan ya da baska etkinlige ait uid'ler atlanir.
+func (ur upload_routes_typ) DeleteTrashed(w http.ResponseWriter, r *http.Request) {
+	fail := func(status int, code, message string) {
+		_ = networkutils.SendErrorJSON(w, status, code, message)
+	}
+
+	claims, ok := r.Context().Value("claims").(auth.TokenClaims)
+	if !ok || claims.Role != "auth" {
+		fail(http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+		return
+	}
+
+	eventUID, err := utils.UUID.UnpackUUID(mux.Vars(r)["eventPackedUid"])
+	if err != nil {
+		fail(http.StatusBadRequest, "BAD_REQUEST", "invalid event id")
+		return
+	}
+
+	var req deleteTrashedReq
+	if err = json.NewDecoder(r.Body).Decode(&req); err != nil {
+		fail(http.StatusBadRequest, "BAD_REQUEST", "bad request")
+		return
+	}
+	if !req.All && len(req.UploadUIDs) == 0 {
+		fail(http.StatusBadRequest, "BAD_REQUEST", "nothing to delete")
+		return
+	}
+	if !req.All {
+		for _, uid := range req.UploadUIDs {
+			if _, parseErr := uuid.Parse(uid); parseErr != nil {
+				fail(http.StatusBadRequest, "BAD_REQUEST", "invalid upload id")
+				return
+			}
+		}
+	}
+
+	isAdmin, err := dbscripts.Is_events_admin(eventUID, claims.UserUID)
+	if errors.Is(err, dbscripts.ErrEventClosed) {
+		fail(http.StatusGone, "EVENT_CLOSED", networkutils.EventClosedMessage(r))
+		return
+	}
+	// Is_events_admin yonetici olmayana hata ("unauthorized") doner; orders.go gibi hepsi 403.
+	if err != nil || !isAdmin {
+		fail(http.StatusForbidden, "FORBIDDEN", "forbidden")
+		return
+	}
+
+	uids := req.UploadUIDs
+	if req.All {
+		uids = nil
+	}
+	deleted, err := eventcleanup.DeleteTrashedMedia(eventUID, uids)
+	if err != nil {
+		fmt.Printf("[upload.delete_trashed] %s: %v\n", eventUID, err)
+		fail(http.StatusInternalServerError, "INTERNAL", "internal error")
+		return
+	}
+
+	networkutils.SendJson(map[string]interface{}{"success": true, "deleted": deleted}, w)
 }
 
 // uploadFileRequest, yeni istek biciminin tek ogesi: dosya adi ve istemcinin bildirdigi boyut.

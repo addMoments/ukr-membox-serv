@@ -19,6 +19,7 @@ import (
 	"net/http"
 	neturl "net/url"
 	"path"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -39,10 +40,31 @@ type Purchase_req struct {
 	Provider_id   string         `json:"provider_id"`
 	Purchase_info map[string]int `json:"purchase_info"`
 	Email         string         `json:"email"`
-	PromoCode     string         `json:"promo_code"`
+	// Checkout'taki iletisim telefonu (musteri 2 Kasim, 2.11). Bos gelebilir: telefon alanindan once
+	// yuklenmis eski arayuz de satin alabilsin. Doluysa purchase_info.phone olarak saklanir.
+	Phone     string `json:"phone"`
+	PromoCode string `json:"promo_code"`
 	// buyer_configs: map of product_id -> JSON string of config fields
 	Buyer_configs    map[string]string `json:"buyer_configs"`
 	Shipping_address *types.Js_object  `json:"shipping_address"`
+}
+
+var contactPhoneRe = regexp.MustCompile(`^\+?[0-9]{9,15}$`)
+
+// normalizeContactPhone bosluk, tire, nokta ve parantezleri atar; sonuc + ile baslayan 9-15 hane
+// olmali (E.164). Gecersizse ok=false. Bos girdi gecerlidir ("" doner).
+func normalizeContactPhone(raw string) (phone string, ok bool) {
+	cleaned := strings.NewReplacer(" ", "", "-", "", ".", "", "(", "", ")", "", "\u00a0", "").Replace(strings.TrimSpace(raw))
+	if cleaned == "" {
+		return "", true
+	}
+	if !contactPhoneRe.MatchString(cleaned) {
+		return "", false
+	}
+	if !strings.HasPrefix(cleaned, "+") {
+		cleaned = "+" + cleaned
+	}
+	return cleaned, true
 }
 
 type Cart_item struct {
@@ -1306,6 +1328,12 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 
 	fmt.Println("provider found: ", provider.Name, provider, req)
 
+	contactPhone, phoneOK := normalizeContactPhone(req.Phone)
+	if !phoneOK {
+		_ = networkutils.SendErrorJSON(w, http.StatusBadRequest, "INVALID_PHONE", "invalid phone number")
+		return
+	}
+
 	// Yukseltme urunleri (Excel 2.18) mevcut bir etkinlige baglanir; burada alinsalar odeme
 	// sonrasi yeni, paketsiz bir etkinlik acilirdi. Yalnizca /api/event/{uid}/upgrade satar.
 	requestedIDs := []string{}
@@ -1486,6 +1514,9 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 	}
 
 	purchaseInfo := types.Js_object{"email": req.Email}
+	if contactPhone != "" {
+		purchaseInfo["phone"] = contactPhone
+	}
 	if req.Shipping_address != nil {
 		purchaseInfo["shipping_address"] = req.Shipping_address
 	}

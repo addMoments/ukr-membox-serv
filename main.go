@@ -140,10 +140,12 @@ func main() {
 	authRoutes.HandleFunc("/signin/email", routes.AuthRoutes.SigninPassword)
 	authRoutes.HandleFunc("/whoami", auth.AuthMiddleware(routes.AuthRoutes.WhoAmI, "auth"))
 	authRoutes.HandleFunc("/account", auth.AuthMiddleware(routes.AuthRoutes.DeleteAccount, "auth")).Methods("DELETE")
+	authRoutes.HandleFunc("/password", auth.AuthMiddleware(routes.AuthRoutes.ChangePassword, "auth")).Methods("POST")
 
 	apiRoutes := r.PathPrefix("/api").Subrouter()
 	apiRoutes.HandleFunc("/upload/{purpose}", auth.AuthMiddleware(routes.UploadRoutes.Upload, "auth"))
 	apiRoutes.HandleFunc("/auth/upload/{uploadPackedUid}", auth.AuthMiddleware(routes.UploadRoutes.Delete, "auth")).Methods("DELETE")
+	apiRoutes.HandleFunc("/auth/event/{eventPackedUid}/trash/delete", auth.AuthMiddleware(routes.UploadRoutes.DeleteTrashed, "auth")).Methods("POST")
 	apiRoutes.HandleFunc("/qr/{eventPackedUid}", auth.AuthMiddleware(routes.Adjust_event_qr, "auth"))
 	apiRoutes.HandleFunc("/qr/{eventPackedUid}/album/{albumPackedUid}", auth.AuthMiddleware(routes.AlbumRoutes.AdjustQR, "auth")).Methods("POST")
 	apiRoutes.HandleFunc("/event/{eventPackedUid}/albums/ensure-qr", auth.AuthMiddleware(routes.AlbumRoutes.EnsureQRs, "auth")).Methods("POST")

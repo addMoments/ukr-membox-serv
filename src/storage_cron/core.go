@@ -2,6 +2,7 @@
 //   - T-14 warning mails (host'a "14 gun icinde silinecek" uyarisi)
 //   - T-0  soft-delete (storage_until gectiginde deleted_at doldurulur)
 //   - export zip'lerini 3 gun sonra silme (saatlik, event_cleanup.ExportZipTTL)
+//   - copteki foto/videolari 14 gun sonra kalici silme (saatlik, event_cleanup.TrashTTL)
 //
 // Tasarim notlari:
 //   - RunOnce idempotent: storage_warning_mail_sent_at ve deleted_at flag'leri
@@ -62,6 +63,13 @@ func Init() {
 				fmt.Printf("[storage_cron] export zip cleanup error (%d removed): %v\n", removed, err)
 			} else if removed > 0 {
 				fmt.Printf("[storage_cron] removed %d export zip(s) older than %s\n", removed, eventcleanup.ExportZipTTL)
+			}
+			// Cop: ekranda "N days left" yaziyor; saatlik bakildigi icin en fazla bir saat gecikir.
+			purged, err := eventcleanup.DeleteExpiredTrash()
+			if err != nil {
+				fmt.Printf("[storage_cron] trash cleanup error: %v\n", err)
+			} else if purged > 0 {
+				fmt.Printf("[storage_cron] deleted %d trashed upload(s) older than %s\n", purged, eventcleanup.TrashTTL)
 			}
 			time.Sleep(time.Hour)
 		}

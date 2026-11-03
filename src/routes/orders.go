@@ -345,7 +345,8 @@ func (o order_routes_typ) GetOrder(w http.ResponseWriter, r *http.Request) {
 			COALESCE(p.event_uid::text, '') AS upgrade_event_uid,
 			COALESCE(p.upgrade_applied_at::text, '') AS upgrade_applied_at,
 			COALESCE(p.provider_id, '') AS provider_id,
-			COALESCE((SELECT e.name FROM events e WHERE e.uid = p.event_uid), '') AS upgrade_event_name
+			COALESCE((SELECT e.name FROM events e WHERE e.uid = p.event_uid), '') AS upgrade_event_name,
+			COALESCE(p.purchase_info->>'phone', '') AS buyer_phone
 		FROM purchases p
 		LEFT JOIN users u ON p.buyer_uid = u.uid
 		WHERE p.uid = ${purchase_uid}
@@ -458,6 +459,7 @@ func (o order_routes_typ) GetOrder(w http.ResponseWriter, r *http.Request) {
 		"created_at":       string(purchaseRow[1]),
 		"buyer_email":      string(purchaseRow[2]),
 		"buyer_name":       string(purchaseRow[3]),
+		"buyer_phone":      string(purchaseRow[15]),
 		"provider":         string(purchaseRow[4]),
 		"shipping_address": shippingAddress,
 		"items":            items,
