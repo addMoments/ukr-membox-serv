@@ -96,8 +96,8 @@ func validateAdvertorialImageURL(raw string) error {
 	if parsed.Scheme != "https" {
 		return errors.New("image_url must use https")
 	}
-	if parsed.Host != "memboxpub-qo1gff2e.s3.eu-north-1.amazonaws.com" {
-		return errors.New("image_url host must be memboxpub-qo1gff2e.s3.eu-north-1.amazonaws.com")
+	if !s3wrap.Public_s3.IsPublicHost(parsed.Host) {
+		return errors.New("image_url host must be our storage host")
 	}
 	if !strings.HasPrefix(parsed.Path, "/advertorial/") {
 		return errors.New("image_url path must start with /advertorial/")

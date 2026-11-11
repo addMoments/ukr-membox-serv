@@ -301,8 +301,8 @@ func validateAddonImageURL(raw string) error {
 	if parsed.Scheme != "https" {
 		return errors.New("image url must use https")
 	}
-	if parsed.Host != "memboxpub-qo1gff2e.s3.eu-north-1.amazonaws.com" {
-		return errors.New("image url host must be memboxpub-qo1gff2e.s3.eu-north-1.amazonaws.com")
+	if !s3wrap.Public_s3.IsPublicHost(parsed.Host) {
+		return errors.New("image url host must be our storage host")
 	}
 	if !strings.HasPrefix(parsed.Path, "/addon_banner/") {
 		return errors.New("image url path must start with /addon_banner/")

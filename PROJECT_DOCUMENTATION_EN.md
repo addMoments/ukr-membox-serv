@@ -255,7 +255,9 @@ Expected shape:
     "key_secret": "...",
     "bucket": "...",
     "region": "...",
-    "endpoint": "..."
+    "endpoint": "...",
+    "public_url": "",
+    "legacy_public_hosts": []
   },
   "payment_secret": "...",
   "smtp": {
@@ -282,6 +284,13 @@ Expected shape:
   }
 }
 ```
+
+`s3.public_url` and `s3.legacy_public_hosts` are optional. When empty, public URLs keep today's S3
+form (`https://<bucket>.s3.<region>.amazonaws.com/<key>`). On Cloudflare R2: `endpoint`
+`https://<account_id>.eu.r2.cloudflarestorage.com`, `region` `auto`, `public_url`
+`https://media.addmoments.com.ua`, `legacy_public_hosts` `["memboxpub-qo1gff2e.s3.eu-north-1.amazonaws.com"]`
+(URLs written before the move are still accepted by downloads and image validation). On a non-AWS
+endpoint a 403 from `HeadObject` is an error, not "object missing".
 
 `db-shell/local-proxy` uses a separate config file:
 

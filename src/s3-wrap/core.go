@@ -6,6 +6,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -31,6 +32,26 @@ type S3_init_inp struct {
 	Bucket     string `json:"bucket"`
 	Region     string `json:"region"`
 	Endpoint   string `json:"endpoint"`
+	// PublicURL: nesnelerin herkese acik okundugu adres (R2 icin ozel alan adi, ornek
+	// "https://media.addmoments.com.ua"). Bossa bugunku S3 bicimi kullanilir:
+	// https://<bucket>.s3.<region>.amazonaws.com
+	PublicURL string `json:"public_url"`
+	// LegacyPublicHosts: tasimadan once yazilmis URL'lerin host'lari (ornek
+	// "memboxpub-qo1gff2e.s3.eu-north-1.amazonaws.com"); Decode_url ve gorsel URL dogrulamalari
+	// bunlari da kabul eder. Bucket R2'deyken region "auto" oldugu icin eski S3 host'u
+	// bucket+region'dan cikarilamaz, buradan gelir.
+	LegacyPublicHosts []string `json:"legacy_public_hosts"`
+}
+
+// isAWS: endpoint AWS S3 mi (bos ya da amazonaws.com). S3'e ozgu davranislar (bucket+region'dan
+// kurulan host, eksik nesnede 403) yalniz burada gecerli.
+func (s S3_init_inp) isAWS() bool {
+	return s.Endpoint == "" || strings.Contains(s.Endpoint, "amazonaws.com")
+}
+
+// s3Host: bugunku S3 sanal-host bicimi.
+func (s S3_init_inp) s3Host() string {
+	return s.Bucket + ".s3." + s.Region + ".amazonaws.com"
 }
 
 func (s S3_init_inp) session() *session.Session {
@@ -339,8 +360,9 @@ func (sr S3_serv) Stat(path string) (size int64, exists bool, err error) {
 
 // Head, Stat gibi ama nesnenin ETag'ini de doner. Presign'li tek parcali PUT'ta ETag icerigin
 // MD5'idir; ayni dosyanin ikinci kez yuklendigini baytlari indirmeden anlamaya yeter (AM-07).
-// 403 de "yok" sayilir: ListBucket yetkisi olmayan kimlige S3 eksik key icin 404 yerine 403
-// doner; GetObject yetkimiz oldugu icin var olan bir nesnede 403 almayiz.
+// AWS'de 403 de "yok" sayilir: ListBucket yetkisi olmayan kimlige S3 eksik key icin 404 yerine 403
+// doner; GetObject yetkimiz oldugu icin var olan bir nesnede 403 almayiz. Diger endpoint'lerde
+// (R2, MinIO) 403 hatadir.
 func (sr S3_serv) Head(path string) (size int64, etag string, exists bool, err error) {
 	if !sr.Is_init {
 		err = fmt.Errorf("s3 is not init")
@@ -353,7 +375,10 @@ func (sr S3_serv) Head(path string) (size int64, etag string, exists bool, err e
 	})
 	if err != nil {
 		if reqErr, ok := err.(awserr.RequestFailure); ok {
-			if code := reqErr.StatusCode(); code == http.StatusNotFound || code == http.StatusForbidden {
+			code := reqErr.StatusCode()
+			// 403 yalniz AWS'de "yok" demek; R2/MinIO eksik anahtara 404 doner, 403 orada yanlis
+			// kimlik ya da yetki demektir ve "yok" sayilirsa yukleme taramasi satirlari siler.
+			if code == http.StatusNotFound || (code == http.StatusForbidden && sr.Inf.isAWS()) {
 				return 0, "", false, nil
 			}
 		}
@@ -363,37 +388,56 @@ func (sr S3_serv) Head(path string) (size int64, etag string, exists bool, err e
 	return aws.Int64Value(out.ContentLength), aws.StringValue(out.ETag), true, nil
 }
 
-func (sr S3_serv) Url(path string) string {
+func (sr S3_serv) Url(key string) string {
+	if sr.Inf.PublicURL != "" {
+		return strings.TrimRight(sr.Inf.PublicURL, "/") + path.Join("/", key)
+	}
+
 	path_ar := make([]string, 0)
-	path_ar = append(path_ar, sr.Inf.Bucket+".s3."+sr.Inf.Region+".amazonaws.com")
-	path_ar = append(path_ar, strings.Split(path, "/")...)
+	path_ar = append(path_ar, sr.Inf.s3Host())
+	path_ar = append(path_ar, strings.Split(key, "/")...)
 
 	return "https://" + filepath.Join(path_ar...)
 }
 
-func (sr S3_serv) Decode_url(uri string) (path string, err error) {
-	url, err := url.Parse(uri)
+// publicHosts: herkese acik URL'lerde kabul edilen host'lar ve her birinin yol oneki
+// (public_url bir yol icerebilir, ornek yerel MinIO "http://127.0.0.1:9100/memboxpub-local").
+func (sr S3_serv) publicHosts() map[string]string {
+	hosts := map[string]string{}
+	for _, h := range sr.Inf.LegacyPublicHosts {
+		if h = strings.TrimSpace(h); h != "" {
+			hosts[strings.ToLower(h)] = ""
+		}
+	}
+	if sr.Inf.isAWS() && sr.Inf.Bucket != "" && sr.Inf.Region != "" {
+		hosts[strings.ToLower(sr.Inf.s3Host())] = ""
+	}
+	if sr.Inf.PublicURL != "" {
+		if u, err := url.Parse(sr.Inf.PublicURL); err == nil && u.Host != "" {
+			hosts[strings.ToLower(u.Host)] = strings.TrimRight(u.Path, "/")
+		}
+	}
+	return hosts
+}
+
+// IsPublicHost: host bu bucket'in herkese acik adreslerinden biri mi (yeni ya da eski).
+func (sr S3_serv) IsPublicHost(host string) bool {
+	_, ok := sr.publicHosts()[strings.ToLower(host)]
+	return ok
+}
+
+// Decode_url: bu bucket'a ait herkese acik bir URL'den anahtari "/" ile baslayan yol olarak doner.
+func (sr S3_serv) Decode_url(uri string) (key string, err error) {
+	u, err := url.Parse(uri)
 	if err != nil {
 		return
 	}
 
-	host_split := strings.Split(url.Host, ".")
-
-	if len(host_split) < 3 {
-		err = fmt.Errorf("invalid decode url format")
+	prefix, ok := sr.publicHosts()[strings.ToLower(u.Host)]
+	if !ok || (prefix != "" && !strings.HasPrefix(u.Path, prefix+"/")) {
+		err = fmt.Errorf("%s: path url does not belong to this bucket", sr.Inf.Bucket)
 		return
 	}
-
-	if host_split[0] != sr.Inf.Bucket {
-		err = fmt.Errorf(sr.Inf.Bucket + ": path url does not belong to this bucket")
-		return
-	}
-
-	if host_split[2] != sr.Inf.Region {
-		err = fmt.Errorf(sr.Inf.Bucket + ": invalid path url reigon")
-		return
-	}
-
-	path = url.Path
+	key = strings.TrimPrefix(u.Path, prefix)
 	return
 }

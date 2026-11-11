@@ -249,7 +249,7 @@ func main() {
 	r.HandleFunc("/ui/{path:.*}", func(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		path := vars["path"]
-		http.Redirect(w, r, "https://memboxpub-qo1gff2e.s3.eu-north-1.amazonaws.com/ui/"+path, http.StatusFound)
+		http.Redirect(w, r, s3wrap.Public_s3.Url("/ui")+"/"+path, http.StatusFound)
 	})
 
 	//apiRoutes := r.PathPrefix("/api").Subrouter()

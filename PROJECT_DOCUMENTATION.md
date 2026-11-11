@@ -259,7 +259,9 @@ Beklenen yapı:
     "key_secret": "...",
     "bucket": "...",
     "region": "...",
-    "endpoint": "..."
+    "endpoint": "...",
+    "public_url": "",
+    "legacy_public_hosts": []
   },
   "payment_secret": "...",
   "smtp": {
@@ -286,6 +288,13 @@ Beklenen yapı:
   }
 }
 ```
+
+`s3.public_url` ve `s3.legacy_public_hosts` istege baglidir. Bos birakilinca herkese acik URL'ler
+bugunku S3 biciminde (`https://<bucket>.s3.<region>.amazonaws.com/<key>`) kurulur. Cloudflare R2'de:
+`endpoint` `https://<account_id>.eu.r2.cloudflarestorage.com`, `region` `auto`, `public_url`
+`https://media.addmoments.com.ua`, `legacy_public_hosts` `["memboxpub-qo1gff2e.s3.eu-north-1.amazonaws.com"]`
+(tasimadan once yazilmis URL'ler indirme ve gorsel dogrulamasinda kabul edilmeye devam eder).
+AWS disi endpoint'te `HeadObject` 403'u "nesne yok" degil hata sayilir.
 
 `db-shell/local-proxy` için ayrı config dosyası kullanılır:
 
@@ -792,7 +801,9 @@ Expected shape:
     "key_secret": "...",
     "bucket": "...",
     "region": "...",
-    "endpoint": "..."
+    "endpoint": "...",
+    "public_url": "",
+    "legacy_public_hosts": []
   },
   "payment_secret": "...",
   "smtp": {
