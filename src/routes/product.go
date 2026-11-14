@@ -1513,6 +1513,28 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// 0 TL siparis LiqPay'e gitmeden tamamlandigi icin kayit linkinin gidecegi adres burada sart.
+	if paymentAmount <= 0 && !strings.Contains(strings.TrimSpace(req.Email), "@") {
+		_ = networkutils.SendErrorJSON(w, http.StatusBadRequest, "INVALID_EMAIL", "invalid email")
+		return
+	}
+
+	// Free paket (urun fiyatlari toplami 0, promo indirimi degil) e-posta basina bir kez (14 Kasim 2026,
+	// musteriye onerildi: her free etkinlik depolama maliyeti). %100 promo kodlari bu sinira girmez,
+	// onlarin kendi kullanim limiti var. Odenmis sayilan onceki free paket siparisi varsa reddedilir.
+	if totalPrice <= 0 {
+		var used bool
+		used, err = freePackageUsedByEmail(req.Email)
+		if err != nil {
+			err = utils.Tag_err("mcefu", err)
+			return
+		}
+		if used {
+			_ = networkutils.SendErrorJSON(w, http.StatusConflict, "FREE_PACKAGE_ALREADY_USED", "the free package can be used once per email")
+			return
+		}
+	}
+
 	purchaseInfo := types.Js_object{"email": req.Email}
 	if contactPhone != "" {
 		purchaseInfo["phone"] = contactPhone
@@ -1567,6 +1589,27 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// 0 TL siparis (13 Kasim 2026: free paket ya da %100 promo kodu). LiqPay 0 tutarli odeme
+	// acmaz; eskiden bu siparis odeme ekraninda takiliyordu. Siparis "free" saglayicisiyla odenmis
+	// sayilir, ardindan LiqPay bildirimindeki adimlar aynen calisir (kayit linki e-postasi dahil)
+	// ve tarayici dogrudan "Payment Successful" ekranina gider (V2Checkout `url` yanitini izler).
+	if paymentAmount <= 0 {
+		promoCodeUID := ""
+		if hasPromoCode {
+			promoCodeUID = promoQuote.PromoCodeUID
+		}
+		fmt.Println("purchase | free order (total 0):", purchaseUID)
+		var redirectURL string
+		redirectURL, err = completeFreePurchase(purchaseUID, packedPurchaseUID, cartUID, []byte(purchaseInfo.Json()), req.Email, promoCodeUID)
+		if err != nil {
+			err = utils.Tag_err("mcef", err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		err = json.NewEncoder(w).Encode(map[string]string{"type": "redirect", "url": redirectURL})
+		return
+	}
+
 	encPackedPurchaseUID, err := mycrypto.Encrypt(packedPurchaseUID, []byte(env.Env().PaymentSecret))
 	if err != nil {
 		err = utils.Tag_err("mce8", err)
@@ -1586,4 +1629,21 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 
 	err = provider.OpenPayment(w, r, paymentreq)
 
+}
+
+// freePackageUsedByEmail, bu e-postayla daha once tamamlanmis bir free paket siparisi (provider
+// "free", brut toplam 0) olup olmadigini soyler. E-posta buyuk/kucuk harf ve bosluk farki gozetmez.
+func freePackageUsedByEmail(email string) (bool, error) {
+	sb := sqlbuilder.NewSelectBuilder()
+	sb.Select("count(*)").From("purchases").Where(
+		sb.Equal("provider", "free"),
+		"COALESCE(gross_total, 0) = 0",
+		"provider_id IS NOT NULL",
+		sb.Equal("lower(btrim(purchase_info->>'email'))", strings.ToLower(strings.TrimSpace(email))),
+	)
+	row, err := db.Query_one(sb)
+	if err != nil {
+		return false, err
+	}
+	return string(row[0]) != "0", nil
 }

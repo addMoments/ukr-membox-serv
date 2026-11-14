@@ -233,7 +233,21 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	cartUID := string(res[2])
+	decEmail, _ := purchaseInfo["email"].(string)
+	redr_url, err = completeEventPurchase(string(res[2]), res[1], decEmail, packedPurchaseUID)
+}
+
+// completeEventPurchase, odemesi dogrulanmis (provider_id yazilmis) yeni etkinlik siparisini
+// tamamlar: sepet satirlarinin durumlari, hazir fiziksel urunlerin Nova Poshta irsaliyesi, kayit
+// linki e-postasi. Donen adres "Payment Successful" ekranidir. LiqPay bildirimi (Payment_cb) ve
+// 0 TL siparis (Purchase, free paket / %100 promo, 13 Kasim 2026) ayni adimlari kullanir.
+func completeEventPurchase(cartUID string, purchaseInfoRaw []byte, decEmail string, packedPurchaseUID string) (redr_url string, err error) {
+	if decEmail == "" {
+		err = fmt.Errorf("pcb5e | purchase has no email")
+		return
+	}
+
+	var ub *sqlbuilder.UpdateBuilder
 
 	// Get cart item uid, product_uid, fulfillment type, buyer_config and product options
 	cartProductsSB := sqlbuilder.NewSelectBuilder()
@@ -314,7 +328,7 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 
 	// Auto-create NP waybills for physical items that are ready (non-fatal)
 	if len(physicalConfiguredItems) > 0 {
-		shippingAddr := shippingAddressFromPurchaseInfo(res[1])
+		shippingAddr := shippingAddressFromPurchaseInfo(purchaseInfoRaw)
 		for _, item := range physicalConfiguredItems {
 			var bc map[string]interface{}
 			json.Unmarshal(item.buyerConfig, &bc)
@@ -340,10 +354,11 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	decEmail := purchaseInfo["email"].(string)
-	pt.ReferenceNo = packedPurchaseUID
-	pt.Status = "m:" + decEmail
-	pt.Provider = "admt_payment"
+	pt := payments.PaymentToken{
+		ReferenceNo: packedPurchaseUID,
+		Provider:    "admt_payment",
+		Status:      "m:" + decEmail,
+	}
 
 	encPaymentTkn, err := pt.Encrypt(env.Env().PaymentSecret)
 	if err != nil {
@@ -379,5 +394,44 @@ func (rfrnc payment_cb_routes_typ) Payment_cb(w http.ResponseWriter, r *http.Req
 	if emailErr != nil {
 		fmt.Println("email send error (non-fatal): ", emailErr)
 	}
+	return
+}
 
+// completeFreePurchase, toplami 0 TL olan yeni etkinlik siparisini (free paket ya da %100 promo
+// kodu) odeme saglayicisina gitmeden odenmis sayar: provider "free", provider_id "free:<uid>".
+// Siparis ekranlari, raporlar ve kayit linki kontrolu (validateSignupToken) provider_id dolu ve
+// "failed:" degilse odenmis kabul ettigi icin baska bir yere dokunmak gerekmiyor. Promo kullanim
+// sayaci LiqPay bildirimindeki gibi bir kez artar.
+func completeFreePurchase(purchaseUID, packedPurchaseUID, cartUID string, purchaseInfoRaw []byte, email, promoCodeUID string) (redr_url string, err error) {
+	ub := sqlbuilder.NewUpdateBuilder()
+	ub.Update("purchases").Set(
+		ub.Assign("provider_id", "free:"+purchaseUID),
+		ub.Assign("provider", "free"),
+	).Where(
+		ub.Equal("uid", purchaseUID),
+		ub.IsNull("provider_id"),
+	)
+	ub.SQL("RETURNING uid")
+	rows, err := db.Query_all(ub)
+	if err != nil {
+		err = utils.Tag_err("pfr1", err)
+		return
+	}
+	if len(rows) == 0 {
+		err = fmt.Errorf("pfr2 | order %s was already processed", purchaseUID)
+		return
+	}
+
+	if promoCodeUID != "" {
+		promoUB := sqlbuilder.NewUpdateBuilder()
+		promoUB.Update("promo_codes").Set(
+			promoUB.Assign("usage_count", sqlbuilder.Raw("usage_count + 1")),
+		).Where(promoUB.Equal("uid", promoCodeUID))
+		if err = db.Exec(promoUB); err != nil {
+			err = utils.Tag_err("pfr3", err)
+			return
+		}
+	}
+
+	return completeEventPurchase(cartUID, purchaseInfoRaw, email, packedPurchaseUID)
 }
