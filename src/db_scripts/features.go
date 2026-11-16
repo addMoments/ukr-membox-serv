@@ -12,4 +12,7 @@ const (
 	// FeatureAddmomentsAds, reklam alanini AddMoments'in yonettigini belirtir (Excel madde 6 ozel paketleri):
 	// misafir sayfasi site_settings.addmoments_ads reklamini gosterir, host alani duzenleyemez. 4'ten onceliklidir.
 	FeatureAddmomentsAds = 5
+	// FeatureDemo, etkinligin demo oldugunu belirtir (site_settings demo_events, demo.go). Bir urunun
+	// verdigi hak degil; routes/features.go listeye ekler, misafir sayfasi demo notunu gosterir.
+	FeatureDemo = 6
 )

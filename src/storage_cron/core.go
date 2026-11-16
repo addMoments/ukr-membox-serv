@@ -74,6 +74,19 @@ func Init() {
 			time.Sleep(time.Hour)
 		}
 	}()
+
+	// Demo etkinligi: misafir yuklemeleri bir saat sonra silinir; 5 dakikada bir bakilir, yani en gec 65 dakikada gider.
+	go func() {
+		for {
+			removed, err := eventcleanup.DeleteExpiredDemoGuestUploads()
+			if err != nil {
+				fmt.Printf("[storage_cron] demo cleanup error (%d removed): %v\n", removed, err)
+			} else if removed > 0 {
+				fmt.Printf("[storage_cron] removed %d demo guest upload(s) older than %s\n", removed, eventcleanup.DemoGuestUploadTTL)
+			}
+			time.Sleep(5 * time.Minute)
+		}
+	}()
 }
 
 // RunOnce, uyari mail job'unu ve soft-delete job'unu sirayla calistirir.

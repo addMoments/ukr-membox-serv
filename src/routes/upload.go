@@ -271,6 +271,17 @@ func (ur upload_routes_typ) GuestUpload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Demo etkinligi: sahip olmayan ziyaretci en fazla DemoGuestMediaLimit dosya tutar (paketin
+	// misafir limitinden bagimsiz; demo Premium bir etkinlik ve orada misafir limiti yok).
+	err = checkDemoGuestLimit(eventUID, claims.UserUID, len(reqData))
+	if err != nil {
+		stat_code = http.StatusForbidden
+		if _, _, ok := uploadLimitError(err); !ok {
+			err = utils.Tag_err("gu2.15", err)
+		}
+		return
+	}
+
 	// Paylasim aninda limiti contributor bazinda kontrol et.
 	err = dbscripts.Check_contributor_limit_for_upload(eventUID, claims.UserUID)
 	if err != nil {
@@ -681,6 +692,23 @@ func decodeUploadRequest(r *http.Request) (names []string, sizes map[string]int6
 }
 
 // uploadLimitError, limit hatalarini frontend'in tanidigi koda ve mesaja cevirir.
+// checkDemoGuestLimit, etkinlik demo ise ve yukleyen sahip/ortak yonetici degilse demo limitini uygular.
+// Demo olmayan etkinlikte tek bir site_settings okumasi yapar ve nil doner.
+func checkDemoGuestLimit(eventUID string, participantUID string, newCount int) error {
+	demo, err := dbscripts.Is_demo_event(eventUID)
+	if err != nil || !demo {
+		return err
+	}
+	owners, err := auth.EventAdminParticipantUIDs(eventUID)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(owners, participantUID) {
+		return nil
+	}
+	return dbscripts.Check_demo_guest_limit(eventUID, participantUID, newCount)
+}
+
 func uploadLimitError(err error) (code string, message string, ok bool) {
 	switch {
 	case errors.Is(err, dbscripts.ErrGuestLimitReached):

@@ -56,6 +56,15 @@ func eventFeatures(eventUID string) (featureIDs []int, err error) {
 		}
 		featureIDs = append(featureIDs, id)
 	}
+
+	// Demo isareti bir urun hakki degil (site_settings demo_events); misafir sayfasi notu buna gore gosterir.
+	demo, err := dbscripts.Is_demo_event(eventUID)
+	if err != nil {
+		return
+	}
+	if demo {
+		featureIDs = append(featureIDs, dbscripts.FeatureDemo)
+	}
 	return
 }
 

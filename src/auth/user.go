@@ -64,6 +64,21 @@ func DerivedParticipantUID(userUID string, eventUID string) string {
 	return uuid.NewSHA1(participantNamespace, []byte(userUID+":"+eventUID)).String()
 }
 
+// EventAdminParticipantUIDs, etkinligin sahip ve ortak yoneticilerinin bu etkinlikte yukleme yaparken
+// kullanabilecegi butun participant uid'lerini doner: hesap uid'i (legacy kayit) ve turev uid.
+// Demo etkinliginde "bizim" yuklemelerimizi misafirlerinkinden ayirmak icin kullanilir.
+func EventAdminParticipantUIDs(eventUID string) ([]string, error) {
+	admins, err := dbscripts.Event_admins(eventUID)
+	if err != nil {
+		return nil, err
+	}
+	uids := make([]string, 0, len(admins)*2)
+	for _, admin := range admins {
+		uids = append(uids, admin, DerivedParticipantUID(admin, eventUID))
+	}
+	return uids, nil
+}
+
 // resolveAuthParticipantUID, giris yapmis kullanicinin bu event'e ozel participant kaydini
 // bulur, yoksa olusturur.
 // Nasil: (userUID, eventUID) ciftinden deterministik bir UUIDv5 turetir. Bu event'te legacy
