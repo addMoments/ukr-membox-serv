@@ -247,6 +247,58 @@ func completeEventPurchase(cartUID string, purchaseInfoRaw []byte, decEmail stri
 		return
 	}
 
+	if err = settleCartItems(cartUID, purchaseInfoRaw); err != nil {
+		return
+	}
+
+	pt := payments.PaymentToken{
+		ReferenceNo: packedPurchaseUID,
+		Provider:    "admt_payment",
+		Status:      "m:" + decEmail,
+	}
+
+	encPaymentTkn, err := pt.Encrypt(env.Env().PaymentSecret)
+	if err != nil {
+		err = fmt.Errorf("pcb6 | invalid reference no")
+		return
+	}
+
+	server_url := "https://" + env.Env().ServRoot
+	signup_url := server_url + "/signup/" + encPaymentTkn
+
+	msgScreen := types.MessageScreen{
+		Title:   "Payment Successful!",
+		Message: "A signup link has been sent to user " + decEmail,
+		Subtext: "Click the link in your inbox or the button below to sign up.",
+		Buttons: []types.MessageScreenButton{
+			{Text: "Sign up now", Href: signup_url},
+		},
+		Link:    signup_url,
+		Warning: "Transaction ID: " + packedPurchaseUID,
+		Image:   "https://addmoments.com.ua/ui/assets/checkmark.svg",
+	}
+
+	encodedMsgScreen, err := msgScreen.Encode()
+	if err != nil {
+		err = utils.Tag_err("pcb9", err)
+		return
+	}
+
+	redr_url = "/notice/" + encodedMsgScreen
+
+	fmt.Println("sending email to ", decEmail)
+	emailErr := sendActivationMail(decEmail, signup_url)
+	if emailErr != nil {
+		fmt.Println("email send error (non-fatal): ", emailErr)
+	}
+	return
+}
+
+// settleCartItems, odemesi dogrulanmis siparisin sepet satirlarini ilerletir: dijital urunler
+// 'purchased', alicinin ayarini girdigi fiziksel urunler 'admin-action' (Nova Poshta irsaliyesi
+// arka planda), ayari eksik fiziksel urunler 'client-action'. completeEventPurchase ve free kayit
+// (signup_free.go, 18 Kasim 2026) kullanir.
+func settleCartItems(cartUID string, purchaseInfoRaw []byte) (err error) {
 	var ub *sqlbuilder.UpdateBuilder
 
 	// Get cart item uid, product_uid, fulfillment type, buyer_config and product options
@@ -354,47 +406,7 @@ func completeEventPurchase(cartUID string, purchaseInfoRaw []byte, decEmail stri
 		}
 	}
 
-	pt := payments.PaymentToken{
-		ReferenceNo: packedPurchaseUID,
-		Provider:    "admt_payment",
-		Status:      "m:" + decEmail,
-	}
-
-	encPaymentTkn, err := pt.Encrypt(env.Env().PaymentSecret)
-	if err != nil {
-		err = fmt.Errorf("pcb6 | invalid reference no")
-		return
-	}
-
-	server_url := "https://" + env.Env().ServRoot
-	signup_url := server_url + "/signup/" + encPaymentTkn
-
-	msgScreen := types.MessageScreen{
-		Title:   "Payment Successful!",
-		Message: "A signup link has been sent to user " + decEmail,
-		Subtext: "Click the link in your inbox or the button below to sign up.",
-		Buttons: []types.MessageScreenButton{
-			{Text: "Sign up now", Href: signup_url},
-		},
-		Link:    signup_url,
-		Warning: "Transaction ID: " + packedPurchaseUID,
-		Image:   "https://addmoments.com.ua/ui/assets/checkmark.svg",
-	}
-
-	encodedMsgScreen, err := msgScreen.Encode()
-	if err != nil {
-		err = utils.Tag_err("pcb9", err)
-		return
-	}
-
-	redr_url = "/notice/" + encodedMsgScreen
-
-	fmt.Println("sending email to ", decEmail)
-	emailErr := sendActivationMail(decEmail, signup_url)
-	if emailErr != nil {
-		fmt.Println("email send error (non-fatal): ", emailErr)
-	}
-	return
+	return nil
 }
 
 // completeFreePurchase, toplami 0 TL olan yeni etkinlik siparisini (free paket ya da %100 promo
@@ -403,6 +415,15 @@ func completeEventPurchase(cartUID string, purchaseInfoRaw []byte, decEmail stri
 // "failed:" degilse odenmis kabul ettigi icin baska bir yere dokunmak gerekmiyor. Promo kullanim
 // sayaci LiqPay bildirimindeki gibi bir kez artar.
 func completeFreePurchase(purchaseUID, packedPurchaseUID, cartUID string, purchaseInfoRaw []byte, email, promoCodeUID string) (redr_url string, err error) {
+	if err = recordFreePayment(purchaseUID, promoCodeUID); err != nil {
+		return
+	}
+	return completeEventPurchase(cartUID, purchaseInfoRaw, email, packedPurchaseUID)
+}
+
+// recordFreePayment, 0 TL siparisi odenmis sayar (provider "free", provider_id "free:<uid>") ve
+// promo kodu varsa kullanim sayacini bir artirir. Ayni siparis ikinci kez islenmez (pfr2).
+func recordFreePayment(purchaseUID, promoCodeUID string) (err error) {
 	ub := sqlbuilder.NewUpdateBuilder()
 	ub.Update("purchases").Set(
 		ub.Assign("provider_id", "free:"+purchaseUID),
@@ -432,6 +453,5 @@ func completeFreePurchase(purchaseUID, packedPurchaseUID, cartUID string, purcha
 			return
 		}
 	}
-
-	return completeEventPurchase(cartUID, purchaseInfoRaw, email, packedPurchaseUID)
+	return nil
 }

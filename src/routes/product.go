@@ -1423,6 +1423,9 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 	note := "Addmoments Purchase:\n"
 	totalPrice := 0.0
 	paymentAmount := 0.0
+	// Sepette 0 fiyatli bir paket (free) var mi. Free paketin yanina ucretli bir ek alininca toplam
+	// 0'dan buyuk oluyor; e-posta basina bir free siniri bu durumda da gecerli (18 Kasim 2026).
+	hasFreePackage := false
 	var promoQuote promo.Quote
 	var promoPartnershipUID interface{}
 	var promoPartnershipSnapshot interface{}
@@ -1442,6 +1445,7 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 		"display_name_uk",
 		"display_description_en",
 		"display_description_uk",
+		"is_add_on",
 	).From("products").Where(sb.In("uid", db_layer.Interface_ar(product_uids)...))
 	products, err := db_layer.Query_all(sb)
 	if err != nil {
@@ -1488,6 +1492,10 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 
 		note += fmt.Sprintf("%s: %dx %s\n", prodName, quantity, prodDesc)
 
+		if isAddOn, parseErr := strconv.ParseBool(string(product[7])); parseErr == nil && !isAddOn && price <= 0 {
+			hasFreePackage = true
+		}
+
 		totalPrice += price * float64(quantity)
 	}
 	paymentAmount = totalPrice
@@ -1522,7 +1530,7 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 	// Free paket (urun fiyatlari toplami 0, promo indirimi degil) e-posta basina bir kez (14 Kasim 2026,
 	// musteriye onerildi: her free etkinlik depolama maliyeti). %100 promo kodlari bu sinira girmez,
 	// onlarin kendi kullanim limiti var. Odenmis sayilan onceki free paket siparisi varsa reddedilir.
-	if totalPrice <= 0 {
+	if totalPrice <= 0 || hasFreePackage {
 		var used bool
 		used, err = freePackageUsedByEmail(req.Email)
 		if err != nil {
@@ -1631,15 +1639,21 @@ func (rfrnc product_routes_typ) Purchase(w http.ResponseWriter, r *http.Request)
 
 }
 
-// freePackageUsedByEmail, bu e-postayla daha once tamamlanmis bir free paket siparisi (provider
-// "free", brut toplam 0) olup olmadigini soyler. E-posta buyuk/kucuk harf ve bosluk farki gozetmez.
+// freePackageUsedByEmail, bu e-postayla daha once odenmis (provider_id dolu, failed: degil) ve
+// sepetinde free paket (0 fiyatli core urun) olan bir siparis olup olmadigini soyler. E-posta
+// buyuk/kucuk harf ve bosluk farki gozetmez. Services & Prices siparisi, free kayit
+// (signup_free.go) ve free + ucretli ek siparisi ayni hakki kullanir.
 func freePackageUsedByEmail(email string) (bool, error) {
 	sb := sqlbuilder.NewSelectBuilder()
-	sb.Select("count(*)").From("purchases").Where(
-		sb.Equal("provider", "free"),
-		"COALESCE(gross_total, 0) = 0",
-		"provider_id IS NOT NULL",
-		sb.Equal("lower(btrim(purchase_info->>'email'))", strings.ToLower(strings.TrimSpace(email))),
+	sb.Select("count(*)").From("purchases pu").Where(
+		"pu.provider_id IS NOT NULL",
+		"pu.provider_id NOT LIKE 'failed:%'",
+		sb.Equal("lower(btrim(pu.purchase_info->>'email'))", strings.ToLower(strings.TrimSpace(email))),
+		// Sepetinde 0 fiyatli paket olan siparis: free paket tek basina (provider free) ya da
+		// yanina ucretli ek alinmis (LiqPay). %100 promolu ucretli paket sayilmaz (snapshot fiyati > 0).
+		`EXISTS (SELECT 1 FROM cart_items ci JOIN products p ON p.uid = ci.product_uid
+		          WHERE ci.cart_uid = pu.cart_uid AND p.is_add_on = FALSE
+		            AND COALESCE(ci.unit_price_snapshot, p.price) = 0)`,
 	)
 	row, err := db.Query_one(sb)
 	if err != nil {

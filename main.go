@@ -233,6 +233,8 @@ func main() {
 	authRoutes.HandleFunc("/signup/email/{token}", routes.SignupEmailRoutes.Get).Methods("GET")
 	authRoutes.HandleFunc("/signup/email/{token}", routes.SignupEmailRoutes.Post).Methods("POST")
 	authRoutes.HandleFunc("/signup/email/{token}/attach", routes.SignupEmailRoutes.Attach).Methods("POST")
+	// Free kayit (18 Kasim 2026): token'siz kayit formu free paket etkinligini tek adimda acar.
+	authRoutes.HandleFunc("/signup/free", routes.SignupEmailRoutes.Free).Methods("POST")
 
 	authRoutes.HandleFunc("/password-reset/request", routes.PasswordResetRoutes.Request).Methods("POST")
 	authRoutes.HandleFunc("/password-reset/confirm", routes.PasswordResetRoutes.Confirm).Methods("POST")

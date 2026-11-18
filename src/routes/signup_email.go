@@ -201,10 +201,26 @@ func (r signup_email_routes_typ) Post(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
+	if _, err = openPurchasedEvent(userUid, unpackedPurchaseUID); err != nil {
+		return
+	}
+
+	// 8. Authorize user
+	_, _, err = auth.Authorize(w, req, "auth", userUid, "")
+	if err != nil {
+		return
+	}
+
+	redr_url = "/events"
+}
+
+// openPurchasedEvent, odenmis siparisi kullaniciya baglar (buyer_uid) ve siparisin etkinligini
+// acar; etkinligin QR'ini uretir. Token'li kayit (Post) ve free kayit (signup_free.go) kullanir.
+func openPurchasedEvent(userUid, purchaseUID string) (eventUID string, err error) {
 	ub := sqlbuilder.NewUpdateBuilder()
 	ub.Update("purchases").Set(
 		ub.Assign("buyer_uid", userUid),
-	).Where(ub.Equal("uid", unpackedPurchaseUID))
+	).Where(ub.Equal("uid", purchaseUID))
 	err = db.Exec(ub)
 	if err != nil {
 		return
@@ -220,7 +236,7 @@ func (r signup_email_routes_typ) Post(w http.ResponseWriter, req *http.Request) 
 	ib.Cols("admins", "purchase_uid", "status")
 	ib.Values(
 		fmt.Sprintf(`{%s}`, userUid),
-		unpackedPurchaseUID,
+		purchaseUID,
 		status,
 	)
 	ib.SQL("RETURNING uid")
@@ -231,14 +247,8 @@ func (r signup_email_routes_typ) Post(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	eventUID := string(res[0])
+	eventUID = string(res[0])
 	fmt.Println("eventUID", eventUID)
-
-	// 8. Authorize user
-	_, _, err = auth.Authorize(w, req, "auth", userUid, "")
-	if err != nil {
-		return
-	}
 
 	packedEventUID, err := utils.UUID.PackUUID(eventUID)
 	if err != nil {
@@ -246,8 +256,7 @@ func (r signup_email_routes_typ) Post(w http.ResponseWriter, req *http.Request) 
 	}
 
 	qr.UpdateEventQR(packedEventUID)
-
-	redr_url = "/events"
+	return
 }
 
 type attachEmailPostReq struct {
