@@ -30,7 +30,12 @@ type warnCandidate struct {
 	Name         string
 	StorageUntil time.Time
 	AdminMails   []string
+	IsFree       bool
 }
+
+// Free paket (7 gun, musteri 19 Kasim) T-14'te hemen ilk gun uyarilirdi; ona silmeden 2 gun once,
+// uzatma yerine yukseltme linkiyle gider (free'de uzatma yok, event.go ExtendStorage).
+const freeWarnDays = 2
 
 // sendWarningMails, T-14 esiginde olan eventleri bulur ve host'lara uyari maili
 // gonderir. Idempotent: storage_warning_mail_sent_at IS NULL filtresi sayesinde
@@ -86,16 +91,20 @@ func fetchWarnCandidates() ([]warnCandidate, error) {
 			COALESCE(
 				string_agg(u.mail, ',') FILTER (WHERE u.mail IS NOT NULL AND u.mail <> ''),
 				''
-			) AS admin_mails
+			) AS admin_mails,
+			COALESCE(cp.id = ${free_id}, FALSE) AS is_free
 		FROM events e
 		LEFT JOIN users u ON u.uid = ANY(e.admins)
+		LEFT JOIN products cp ON cp.uid = event_core_product_uid(e.uid)
 		WHERE e.deleted_at                   IS NULL
 		  AND e.storage_until                IS NOT NULL
 		  AND e.storage_warning_mail_sent_at IS NULL
 		  AND e.storage_until > NOW()
-		  AND (e.storage_until - interval '14 days') <= NOW()
-		GROUP BY e.uid, e.name, e.storage_until
-	`, nil)
+		  AND (e.storage_until - CASE WHEN cp.id = ${free_id}
+		                              THEN make_interval(days => ${free_days})
+		                              ELSE interval '14 days' END) <= NOW()
+		GROUP BY e.uid, e.name, e.storage_until, cp.id
+	`, map[string]interface{}{"free_id": "free", "free_days": freeWarnDays})
 
 	rows, err := db.Query_all(bldr)
 	if err != nil {
@@ -132,6 +141,8 @@ func fetchWarnCandidates() ([]warnCandidate, error) {
 			}
 		}
 
+		c.IsFree = string(row[4]) == "t" || string(row[4]) == "true"
+
 		out = append(out, c)
 	}
 
@@ -145,6 +156,23 @@ func sendOneWarning(c warnCandidate) error {
 	}
 
 	expDate := c.StorageUntil.UTC().Format("2006-01-02")
+
+	if c.IsFree {
+		upgradeURL := fmt.Sprintf("%s/event/%s/upgrade", frontendBaseURL(), packedUID)
+		subject := fmt.Sprintf("Your free event will be deleted in %d days", freeWarnDays)
+		return sendemail.Info_mail.SendAndKeepCopy(c.AdminMails, subject, func(w io.WriteCloser) {
+			sendemail.Write_html(w, "Your free event is about to expire", []string{
+				fmt.Sprintf(
+					`Your free event "%s" will be permanently deleted on <b>%s</b>. After this date, all photos, videos and content will be removed.`,
+					c.Name, expDate,
+				),
+				fmt.Sprintf("You can upgrade it until <b>%s</b>. Your link, QR code and photos stay the same.",
+					c.StorageUntil.Add(-time.Second).UTC().Format("2006-01-02")),
+				sendemail.Button(upgradeURL, "Upgrade your package"),
+				"If the button doesn't work, copy and paste this link into your browser:<br>" + upgradeURL,
+			})
+		}, nil)
+	}
 	eventURL := fmt.Sprintf("%s/event/%s?prompt=extend", frontendBaseURL(), packedUID)
 
 	subject := "Your event will be deleted in 14 days"

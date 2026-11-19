@@ -305,6 +305,25 @@ func (er event_routes_typ) ExtendStorage(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// 3a. Free pakette uzatma yok (musteri 19 Kasim: bildirimde "1 ay uzat" dugmesi kalkti). Dugme yalniz
+	// on yuzden kalksa API ile bedava +30 gun alinabilirdi; 18-19 Kasim'da iki free etkinlik boyle uzadi.
+	isFree, err := eventIsFreePackage(eventUID)
+	if err != nil {
+		err = utils.Tag_err("ext2f", err)
+		return
+	}
+	if isFree {
+		_ = networkutils.SendErrorJSON(
+			w,
+			http.StatusConflict,
+			"EXTEND_REJECTED",
+			"The free package cannot be extended; upgrade the package instead.",
+		)
+		err = errors.New("free package cannot be extended")
+		stat_code = http.StatusConflict
+		return
+	}
+
 	// 4. Mevcut storage_until ve storage_extended_at degerlerini cek.
 	// Burada kontrol etmemizin sebebi: race condition'a girmeden once
 	// kullaniciya hangi nedenle reddedildigini anlamli kodlarla bildirmek.
@@ -391,4 +410,18 @@ func (er event_routes_typ) ExtendStorage(w http.ResponseWriter, r *http.Request)
 		"storage_until": newStorageUntil,
 	}
 	stat_code = http.StatusOK
+}
+
+// eventIsFreePackage, etkinligin gecerli paketi (yukseltme dahil, event_core_product_uid) free mi.
+func eventIsFreePackage(eventUID string) (bool, error) {
+	bldr := sqlbuilder.BuildNamed(`
+		SELECT COUNT(*) FROM products
+		 WHERE uid = event_core_product_uid(${event_uid})
+		   AND id = ${free_id}
+	`, map[string]interface{}{"event_uid": eventUID, "free_id": freePackageProductID})
+	row, err := db.Query_one(bldr)
+	if err != nil {
+		return false, err
+	}
+	return string(row[0]) != "0", nil
 }
